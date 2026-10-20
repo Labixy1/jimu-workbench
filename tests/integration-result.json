@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "mode": "local deterministic fixture, not AI quality",
+  "opencode": "1.19.3",
+  "cases": [
+    {
+      "workspace": "temporary standalone",
+      "stages": 3,
+      "real_read_calls": 3,
+      "unselected_read_denied": true,
+      "chat_without_artifact_write": true
+    },
+    {
+      "workspace": "nested enclosing Git project",
+      "stages": 3,
+      "real_read_calls": 3,
+      "unselected_read_denied": true,
+      "chat_without_artifact_write": true
+    }
+  ],
+  "review_then_approve": true,
+  "reopen": true,
+  "restore": true,
+  "interrupt": true
+}

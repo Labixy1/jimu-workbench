@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/SamurAIGPT/llm-wiki-agent",
+  "commit": "a17ab5df66da9b74a0eaeb664a67d662d0fb166d",
+  "license": "MIT",
+  "integration": "workflow instructions adapted; graph and converters not executed"
+}

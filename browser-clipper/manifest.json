@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "积木 · 网页采集",
+  "version": "0.1.0",
+  "description": "手动采集当前网页或选中文字，预览后导入本地积木。",
+  "permissions": ["activeTab", "scripting"],
+  "action": {"default_popup": "popup.html"}
+}

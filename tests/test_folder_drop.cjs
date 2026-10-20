@@ -1,0 +1,26 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const handlers={},calls=[];
+const categories=['a','b','c'].map(id=>({id,name:id,scope:'materials',parent_id:'',revision:1}));
+const ctx=vm.createContext({state:{categories},document:{addEventListener:(type,f)=>handlers[type]=f,querySelectorAll:()=>[]},assetDropTarget:()=>null,openFolders:new Set(),api:async(path,data)=>calls.push({path,data}),load:async()=>{},renderAssetBrowser(){},toast(){}});
+const source=fs.readFileSync('web/asset-browser.js','utf8');
+vm.runInContext(source.slice(source.indexOf('let draggedFolderId=null;'),source.indexOf('function addAssetLink(')),ctx);
+const target={dataset:{libraryCategory:'b',libraryOrigin:'materials'},classList:{add(){}}};
+const row={querySelector:()=>target,getBoundingClientRect:()=>({top:100,bottom:140,height:40}),classList:{add(){}}};
+const element={closest:()=>row};
+(async()=>{
+ vm.runInContext("draggedFolderId='c'",ctx);
+ assert.equal(ctx.folderDropIntent(element,101).position,'before');
+ assert.equal(ctx.folderDropIntent(element,120).position,'inside');
+ assert.equal(ctx.folderDropIntent(element,139).position,'after');
+ await handlers.drop({target:element,clientY:101,preventDefault(){}});
+ assert.equal(calls[0].path,'/api/categories/order');
+ assert.deepEqual(Array.from(calls[0].data.ids),['a','c','b']);
+ assert.equal(categories[2].parent_id,'','insertion keeps the existing parent');
+ vm.runInContext("draggedFolderId='c'",ctx);
+ await handlers.drop({target:element,clientY:120,preventDefault(){}});
+ assert.equal(calls[1].path,'/api/categories');assert.equal(calls[1].data.parent_id,'b');
+ categories[2].parent_id='different';vm.runInContext("draggedFolderId='c'",ctx);
+ assert.equal(ctx.folderDropIntent(element,101),null,'edge insertion is limited to siblings');
+ console.log('PASS folder edges reorder siblings; middle nests; parent is preserved on reorder');
+})().catch(e=>{console.error(e);process.exitCode=1;});

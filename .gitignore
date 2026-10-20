@@ -6,3 +6,5 @@ __pycache__/
 vendor/opencode
 ui-board/node_modules/
 web/board-assets/
+.venv/
+.DS_Store
