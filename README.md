@@ -38,7 +38,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install pypdf pypdfium2
 export JIMU_PYTHON="$PWD/.venv/bin/python"
 
-npm ci --prefix ui-board
+npm install --prefix ui-board
 node ui-board/build.mjs
 ```
 
