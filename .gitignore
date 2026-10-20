@@ -1,0 +1,8 @@
+.runtime/
+data/
+.env
+__pycache__/
+*.pyc
+vendor/opencode
+ui-board/node_modules/
+web/board-assets/
