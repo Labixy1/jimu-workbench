@@ -106,7 +106,7 @@ OpenCode 未打包在仓库内；其他版本可能需要适配。
 
 本地启动后可打开 `/?showcase=1` 回看本轮公开资料与真实生成结果；这个副本只读，不调用模型，不包含私人材料。正常使用请打开 `/`。
 
-网页手动采集扩展的安装说明见 [browser-clipper/README.md](browser-clipper/README.md)。演示操作脚本见 [docs/demo-script.md](docs/demo-script.md)。
+网页手动采集扩展的安装说明见 [browser-clipper/README.md](browser-clipper/README.md)。
 
 ### Skills
 
