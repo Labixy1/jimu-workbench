@@ -134,12 +134,12 @@ class Store:
             if first:
                 topic = re.sub(r'\s+', ' ', text).strip()
                 topic = re.sub(r'^(请|帮我|我想|能不能|可以|根据|基于|对照)+', '', topic).strip()
-                self.db.execute('UPDATE conversations SET title=? WHERE id=?', (topic[:24] or '新对话', cid))
+                self.db.execute('UPDATE conversations SET title=? WHERE id=?', (topic[:48] or '新对话', cid))
             self.db.commit()
 
     def summarize_title(self, cid, title, job_id):
         """Only the first task sets the model title; follow-ups retain the topic."""
-        title = re.sub(r'\s+', ' ', str(title or '')).strip().strip('#"')[:24]
+        title = re.sub(r'\s+', ' ', str(title or '')).strip().strip('#"')[:80]
         if not title: return
         with self.lock:
             first = self.db.execute('SELECT job_id FROM messages WHERE conversation_id=? AND role=? ORDER BY rowid LIMIT 1', (cid, 'user')).fetchone()
@@ -211,8 +211,8 @@ class Store:
             draft=job['payload'].get('user_draft')
             if draft:
                 p=job['payload'];kind=p.get('kind')
-                if kind in ('wiki','document'):
-                    key='page' if kind=='wiki' else 'document'
+                if kind in ('wiki','document') or p.get('chat_output'):
+                    key='document' if kind=='document' else 'page'
                     p['proposal'][key].update(title=draft['title'],content=draft['content'])
                 elif kind in ('experience','tailor'):
                     p['proposal'].update(title=draft['title'])
@@ -229,10 +229,10 @@ class Store:
             if job['payload'].get('output_board'):
                 p=job['payload'];allowed={sid:self.source(sid) for sid in p['source_ids']}
                 if any(s['archived'] for s in allowed.values()):raise Conflict('来源已归档，请重新生成')
-                page=self.validate_wiki(p['proposal']['page'],allowed)
+                page=self.validate_wiki(p['proposal']['page'],allowed,require_citations=not p.get('chat_output') or bool(allowed))
                 import boards
                 # Save board and mark its originating proposal in the same transaction.
-                result=boards.save(self,{'title':page['title'],'scene':p.get('board_draft_scene') or boards.flow_scene(page['diagram']),'category_id':(edits or {}).get('category_id','')},job_id=jid)
+                result=boards.save(self,{'title':page['title'],'scene':p.get('board_draft_scene') or boards.page_scene(page),'category_id':(edits or {}).get('category_id','')},job_id=jid)
                 return result
             if job['payload'].get('kind')=='document':
                 from library import approve_document
@@ -240,7 +240,7 @@ class Store:
             if job['payload'].get('kind') in ('experience','tailor'):
                 from career import approve
                 return approve(self,job,edits or {})
-            if job['payload'].get('kind')=='wiki':return self.approve_wiki(job, edits or {})
+            if job['payload'].get('kind')=='wiki' or job['payload'].get('chat_output'):return self.approve_wiki(job, edits or {})
             p=job['payload'];artifact=self.artifact(job['artifact_id'])
             if artifact['revision']!=p['base_revision']:raise Conflict('成果已更新；请基于最新版本重新生成')
             sources={sid:self.source(sid) for sid in p['source_ids']}
@@ -314,13 +314,19 @@ class Store:
         diagram=page.get('diagram',[])
         if not isinstance(diagram,list) or len(diagram)>10 or any(not isinstance(n,str) or not 1<=len(n.strip())<=60 for n in diagram):
             raise ValueError('流程图最多10个步骤，每个步骤1至60字')
-        return {'title':title,'summary':summary,'content':content,'tags':tags,'links':links,'citations':checked,'diagram':[n.strip() for n in diagram]}
+        body={'title':title,'summary':summary,'content':content,'tags':tags,'links':links,'citations':checked,'diagram':[n.strip() for n in diagram]}
+        if page.get('graph') is not None:
+            from boards import validate_graph
+            body['graph']=validate_graph(page['graph'])
+        return body
 
     def save_wiki(self, page, target=None, expected_revision=0, reason='手动确认知识页', destination=None, origin=None, reference=''):
         with self.lock:
             allowed={s['id']:s for s in self.sources() if not s['archived']}
             body=self.validate_wiki(page,allowed,require_citations=False)
             if target and 'diagram' not in page:body['diagram']=self.artifact(target)['body'].get('diagram',[])
+            if target and 'graph' not in page and self.artifact(target)['body'].get('graph'):
+                body['graph']=self.artifact(target)['body']['graph']
             return self._write_wiki(body,target,expected_revision,reason,destination,origin,reference)
 
     def _write_wiki(self, body, target, expected, reason, destination=None, origin=None, reference=''):
@@ -341,12 +347,14 @@ class Store:
     def approve_wiki(self, job, edits=None):
         p=job['payload'];allowed={sid:self.source(sid) for sid in p['source_ids']}
         if any(s['archived'] for s in allowed.values()):raise Conflict('来源已经归档，请重新选择')
-        body=self.validate_wiki(p['proposal']['page'],allowed)
+        body=self.validate_wiki(p['proposal']['page'],allowed,require_citations=not p.get('chat_output') or bool(allowed))
         # _write_wiki and job approval share this transaction.
         target=p.get('wiki_target_id');expected=p.get('wiki_base_revision',0)
         existing=self.artifact(target) if target else None
         if existing and (existing['kind']!='wiki' or existing['revision']!=expected or existing['archived']):raise Conflict('知识页已经变更，请重新生成')
-        if existing:body['diagram']=existing['body'].get('diagram',[])
+        if existing:
+            body['diagram']=existing['body'].get('diagram',[])
+            if not body.get('graph') and existing['body'].get('graph'):body['graph']=existing['body']['graph']
         aid=target or uid('wiki');revision=expected+1;encoded=json.dumps(body,ensure_ascii=False)
         try:
             if existing:self.db.execute('UPDATE artifacts SET title=?,body=?,revision=?,updated=? WHERE id=?',(body['title'],encoded,revision,now(),aid))

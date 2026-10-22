@@ -1,5 +1,8 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><title>积木网页采集</title><link rel="stylesheet" href="popup.css"></head><body>
-<h1>采集到积木</h1><p>先在网页完成登录。可选中 JD 正文后采集，不读取密码或 Cookie。</p>
-<button id="capture">读取当前页 / 选中文字</button>
-<form id="handoff" hidden><label>标题<input id="title" maxlength="200" required></label><label>来源<input id="url" readonly></label><label>正文<textarea id="content" rows="10" required maxlength="20000"></textarea></label><label>分类<select id="category"><option value="jd">招聘 JD</option><option value="article">文章</option><option value="reference">参考资料</option></select></label><label>目标空间<select id="space"><option value="personal">我的空间</option><option value="demo">示例空间</option></select></label><button>带到积木预览</button></form><p id="status" role="status"></p><small>仅发送你确认的文字与来源。积木需在本机8768端口运行，导入页再次确认后才保存；不会自动发送给模型。</small><script src="popup.js"></script></body></html>
+<header><span class="mark">积</span><div><h1>采集到积木</h1><p>把正在阅读的内容留下来</p></div></header>
+<button id="capture" class="primary">读取当前文章</button>
+<form id="handoff" hidden><label>标题<input id="title" maxlength="200" required></label><label>来源<input id="url" readonly></label><label>正文<textarea id="content" rows="8" required maxlength="40000"></textarea></label><div id="metadata"></div><button class="primary">带到积木预览</button></form>
+<details><summary>积木地址</summary><input id="endpoint" type="url" value="http://127.0.0.1:8768" aria-label="积木地址"><small>可改为当前使用的本机端口。</small></details>
+<p id="status" role="status"></p><footer>只读取当前文章或选中文字，不读取密码与 Cookie。保存前可以选择目录与收藏分类。</footer>
+<script src="extract.js"></script><script src="popup.js"></script></body></html>

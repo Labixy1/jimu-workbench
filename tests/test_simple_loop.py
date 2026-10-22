@@ -31,6 +31,15 @@ class SimpleLoopTests(unittest.TestCase):
         self.app.store.summarize_title(cid,'再短一点','second')
         self.assertEqual(self.app.store.conversations()[0]['title'],'商品图项目经历')
 
+    def test_generated_title_is_not_cut_mid_model_or_version_name(self):
+        cid=self.app.store.conversation()
+        self.app.store.message(cid,'user','整理所选源码','first')
+        title='OpenCode Agent Loop（22e771f 源码摘录）'
+        self.app.store.summarize_title(cid,title,'first')
+        self.assertEqual(self.app.store.conversations()[0]['title'],title)
+        self.app.store.summarize_title(cid,'x'*200,'first')
+        self.assertEqual(len(self.app.store.conversations()[0]['title']),80)
+
     def test_skill_is_task_specific_and_frozen(self):
         source=self.app.store.add_source('公开材料','这是公开材料的原始内容，需要有准确的原文依据。')['source']
         _,job=self.request('/api/jobs',{'kind':'wiki','prompt':'整理知识','source_ids':[source['id']]})

@@ -1,12 +1,16 @@
 'use strict';
 const executionExpanded=new Set();
+function executionToolMarkup(tool){
+ const state={completed:'完成',pending:'等待',running:'执行中',error:'失败'}[tool.status]||tool.status;
+ return `<small>${tool.name==='skill'?'加载 Skill · '+esc(tool.skill||'未知技能'):'工具 · '+esc(tool.name)} · ${esc(state)}</small>`;
+}
 function executionMarkup(j){
  if(!j)return '';
  const busy=['queued','running'].includes(j.status),bad=['failed','interrupted'].includes(j.status);
  const labels={queued:'等待执行',running:'正在处理',review:j.payload.output_board?'画板已生成':'文稿已生成',approved:'成果已保存',done:'已完成',failed:'执行失败',interrupted:'已中断',rejected:'未保存'};
  const stages=j.payload.stages||[],current=stages.find(s=>s.status==='running');
  const agents={workbench:'主 Agent',researcher:'研究子 Agent',reviewer:'核对子 Agent'};
- return `<details class="turn-execution ${bad?'execution-failed':''} ${busy?'execution-running':''}" data-execution-id="${esc(j.id)}" ${executionExpanded.has(j.id)?'open':''}><summary><span class="execution-indicator">${busy?'◌':bad?'!':'✓'}</span><span>${esc(current?current.name:labels[j.status]||j.status)}</span><span class="execution-count">${stages.length?stages.length+' 个步骤':''}</span><span class="execution-chevron">⌄</span></summary><div class="execution-body">${(j.payload.skill_snapshot||[]).length?`<div class="execution-skill-list">${j.payload.skill_snapshot.map(s=>`<span>技能 · ${esc(s.title)}</span>`).join('')}</div>`:''}${stages.map(s=>`<div class="execution-step"><span class="step-dot ${esc(s.status)}"></span><div><strong>${esc(agents[s.agent]||s.agent||'积木')}</strong><p>${esc(s.name)}</p>${s.interface?`<small>${esc(s.interface)}</small>`:''}${(s.tools||[]).map(t=>`<small>工具 · ${esc(t.name)} · ${esc(t.status)}</small>`).join('')}</div><span>${{done:'完成',running:'执行中',failed:'失败'}[s.status]||esc(s.status)}</span></div>`).join('')}${j.payload.context_meta?`<div class="execution-meta">本次引用 ${j.payload.context_meta.source_count||0} 份材料、${j.payload.context_meta.knowledge_count||0} 份文稿、${j.payload.context_meta.board_count||0} 个画板；近期对话按上下文预算带入。</div>`:''}</div></details>`;
+ return `<details class="turn-execution ${bad?'execution-failed':''} ${busy?'execution-running':''}" data-execution-id="${esc(j.id)}" ${executionExpanded.has(j.id)?'open':''}><summary><span class="execution-indicator">${busy?'◌':bad?'!':'✓'}</span><span>${esc(current?current.name:labels[j.status]||j.status)}</span><span class="execution-count">${stages.length?stages.length+' 个步骤':''}</span><span class="execution-chevron">⌄</span></summary><div class="execution-body">${(j.payload.skill_snapshot||[]).length?`<div class="execution-skill-list">${j.payload.skill_snapshot.map(s=>`<span>技能 · ${esc(s.title)}</span>`).join('')}</div>`:''}${stages.map(s=>`<div class="execution-step"><span class="step-dot ${esc(s.status)}"></span><div><strong>${esc(agents[s.agent]||s.agent||'积木')}</strong><p>${esc(s.name)}</p>${s.interface?`<small>${esc(s.interface)}</small>`:''}${(s.tools||[]).map(executionToolMarkup).join('')}</div><span>${{done:'完成',running:'执行中',failed:'失败'}[s.status]||esc(s.status)}</span></div>`).join('')}${j.payload.context_meta?`<div class="execution-meta">本次引用 ${j.payload.context_meta.source_count||0} 份材料、${j.payload.context_meta.knowledge_count||0} 份文稿、${j.payload.context_meta.board_count||0} 个画板；近期对话按上下文预算带入。</div>`:''}</div></details>`;
 }
 function renderMessages(){
  const signature=JSON.stringify([messages,state.jobs.filter(j=>j.conversation_id===cid).map(j=>[j.id,j.status,j.payload.stages,j.payload.error,j.payload.user_draft,j.payload.proposal]),[...executionExpanded]]);
@@ -18,13 +22,13 @@ function renderMessages(){
    const p=j?.payload||{},refs=[...(p.source_ids||[]).map(id=>({name:p.source_snapshot?.[id]?.title||state.sources.find(s=>s.id===id)?.title||'材料',type:'文件'})),...(p.document_snapshot||[]).map(a=>({name:a.title,type:'文稿'})),...(p.board_snapshot||[]).map(a=>({name:a.title,type:'画板'})),...(p.skill_snapshot||[]).map(a=>({name:a.title,type:'技能'}))];
    return `<article class="message user"><div class="user-message-text">${esc(m.text)}</div>${refs.length?`<div class="message-references">${refs.map(r=>`<span title="${esc(r.type+' · '+r.name)}">${esc(r.name)}</span>`).join('')}</div>`:''}</article>`;
   }
-  return `<article class="message assistant ${bad?'message-error':''}">${executionMarkup(j)}${bad?`<div class="chat-error" role="alert"><strong>这次请求未完成</strong><p>${esc(j.payload.error||m.text)}</p></div>`:`<div class="markdown">${md(m.text)}</div>`}<div class="message-actions">${!bad?`<button class="text-button" data-copy-response="${i}" aria-label="复制回答" title="复制回答">复制</button>${j?.payload.kind==='chat'?`<button class="text-button save-answer" data-save-message="${i}">存为文稿</button>`:''}`:''}</div>${turnFileMarkup(j)}</article>`;
+  return `<article class="message assistant ${bad?'message-error':''}">${executionMarkup(j)}${bad?`<div class="chat-error" role="alert"><strong>这次请求未完成</strong><p>${esc(j.payload.error||m.text)}</p></div>`:`<div class="markdown">${md(m.text)}</div>`}<div class="message-actions">${!bad?`<button class="text-button" data-copy-response="${i}" aria-label="复制回答" title="复制回答">复制</button>${j?.payload.kind==='chat'&&!j?.payload.chat_output?`<button class="text-button save-answer" data-save-message="${i}">存为文稿</button>`:''}`:''}</div>${turnFileMarkup(j)}</article>`;
  }).join('');
  if(follow)requestAnimationFrame(()=>thread.scrollTop=thread.scrollHeight);
 }
 function turnFileMarkup(j){
  if(!j||!['review','approved'].includes(j.status))return '';
- const f=proposalFile(j);if(!f)return '';
+ const f=j.status==='approved'?(state.artifacts||[]).find(a=>a.id===j.payload.published_id)||proposalFile(j):proposalFile(j);if(!f)return '';
  return `<button class="chat-file-card" data-open-job-file="${esc(j.id)}"><svg class="icon"><use href="#i-book"/></svg><span><strong>${esc(f.title)}${j.payload.output_board?'.excalidraw':'.md'}</strong><small>${j.payload.output_board?'画板':'Markdown'} · ${j.status==='approved'?'已加入资产':'打开查看'}</small></span><span>↗</span></button>`;
 }
 const originalChatReview=renderReview;

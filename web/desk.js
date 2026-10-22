@@ -1,6 +1,7 @@
 'use strict';
 let workTab='reading',deskSignature='',usageSnapshot=null,usageLoading=false,usageError='',balanceSnapshot=null,balanceLoading=false,balanceError='';
 let readingFilter='all',newsSelection=new Set(),newsRefreshing=false,newsWarnings=[],newsGenerating=false;
+let readingUpdateTimer=null,readingUpdatePolling=false;
 function readingSubscriptions(){return state.weekly.subscriptions||((state.weekly.config?.id||state.weekly.config?.urls?.length)?[state.weekly.config]:[]);}
 function subscriptionForPage(page,runs,subscriptions){
  if(state.weekly.page_subscriptions?.[page.id])return state.weekly.page_subscriptions[page.id];
@@ -20,26 +21,159 @@ function issueRows(items){return items.map(p=>`<button class="desk-issue" data-d
 function runRows(runs){return runs.map(r=>`<div class="desk-run"><div><strong>${esc(r.config?.title||'阅读任务')}</strong><span>${localDate(r.created)}</span>${r.error?`<p class="error">${esc(r.error)}</p>`:''}${r.warnings?.length?`<details><summary>采集说明 · ${r.warnings.length}</summary>${r.warnings.map(w=>`<p>${esc(w)}</p>`).join('')}</details>`:''}</div><div><span class="run-state ${esc(r.status)}">${issueStates[r.status]||esc(r.status)}</span>${r.published_id&&pages().some(p=>p.id===r.published_id)?`<button class="text-button" data-desk-issue="${r.published_id}">阅读</button>`:r.conversation_id&&state.conversations.some(c=>c.id===r.conversation_id)?`<button class="text-button" data-conversation="${r.conversation_id}">${r.status==='review'?'审核草稿':'查看过程'}</button>`:''}</div></div>`).join('');}
 let readingCategory='all',readingCollection=[],readingCollectionLoaded=false;
 const readingTopics=['全部','模型与Agent','产品与设计','电商经营'];
-function topicFor(n){const text=(n.title+' '+n.excerpt).toLowerCase();return /电商|商家|营销|ecommerce|commerce/.test(text)?'电商经营':/design|产品|设计|workflow/.test(text)?'产品与设计':'模型与Agent';}
+function topicFor(n){if(readingTopics.includes(n.topic))return n.topic;const text=(n.title+' '+n.excerpt).toLowerCase();return /电商|商家|营销|ecommerce|commerce/.test(text)?'电商经营':/design|产品|设计|workflow/.test(text)?'产品与设计':'模型与Agent';}
 function collectionPanel(section,title){const items=readingCollection.filter(i=>i.section===section).map(i=>state.sources.find(s=>s.id===i.source_id&&!s.archived)).filter(Boolean);return `<section class="reading-block"><div class="reading-block-head"><h2>${title}</h2><button data-reading-add="${section}" aria-label="添加${title}">+</button></div>${items.length?items.map(s=>`<button class="reading-saved-row" data-source="${esc(s.id)}"><strong>${esc(s.title)}</strong><span>${esc(s.content.slice(0,70))}</span></button>`).join(''):`<div class="reading-empty">${section==='wechat'?'收下关注作者的新文章':'收集面经、面试题与自己的回答'}<button data-reading-add="${section}">添加文章</button></div>`}</section>`;}
 let readingIssueId='latest';
-const readingSampleIssues=[['2026-10-12','从回答到执行：理解 Agent'],['2026-10-05','把材料变成可复用的知识'],['2026-09-28','从用户问题到产品方案']].map(([date,title],i)=>({id:'sample-week-'+i,title,updated:date+'T12:00:00+08:00',sample:true,body:{content:'# '+title+'\n\n模拟周刊，仅用于预览历史期数与阅读交互。',citations:[]},news:[{id:'sample-article-'+i+'-a',title,excerpt:'围绕本期主题整理关键问题、方法和实践方向。这是模拟学习内容，不是该日期的真实新闻。',feed_url:'https://example.com/',published_at:date+'T12:00:00+08:00',sample:true},{id:'sample-article-'+i+'-b',title:['如何设计工具调用与权限边界','为什么资料和整理成果需要区分','如何评估任务是否真正完成'][i],excerpt:'记录问题、设计选择和验证方式，形成下次可以复用的学习笔记。',feed_url:'https://example.com/',published_at:date+'T12:00:00+08:00',sample:true}]}));
+
+function issuePeriodLabel(issue){
+ if(!issue?.body.period_start)return weekRange(issue?new Date(issue.updated):new Date());
+ const format=value=>value.slice(5).replace('-','/');
+ return format(issue.body.period_start)+' — '+format(issue.body.period_end);
+}
+function findReadingNews(id){
+ const archived=(state.reading?.issues||[]).find(p=>p.id===readingIssueId)?.body.news?.find(n=>n.id===id);
+ return (state.weekly.news||[]).find(n=>n.id===id)||archived||(state.reading?.issues||[]).flatMap(p=>p.body.news||[]).find(n=>n.id===id);
+}
+function newsCoverPath(n){return scoped('/api/news/'+encodeURIComponent(n.id)+'/cover');}
+function newsDateLabel(n){
+ if(n.published_at)return new Date(n.published_at).toLocaleDateString('zh-CN',{month:'2-digit',day:'2-digit'});
+ return n.fetched_at?'采集 '+new Date(n.fetched_at).toLocaleDateString('zh-CN',{month:'2-digit',day:'2-digit'}):'日期未提供';
+}
+function readingArticleCard(n){
+ const preview=n.content_status==='browser'?(n.source_kind||'浏览器')+'正文':n.content_status==='article'?'正文':'来源摘要';
+ const saved=(state.reading?.favorites||[]).includes(n.source_id);
+ return `<article class="weekly-article-card"><button class="weekly-cover ${n.cover_url?'has-cover':'empty-cover'}" data-news-open="${esc(n.id)}" aria-label="预览${esc(n.title)}">${n.cover_url?`<img src="${newsCoverPath(n)}" alt="${esc(n.title)} · 原文封面" loading="lazy" decoding="async" data-reading-cover>`:''}</button><div class="weekly-card-content"><div class="reading-article-source"><span>${esc(newsSource(n))}</span><span>${esc(preview)}</span></div><button class="news-title" data-news-open="${esc(n.id)}">${esc(n.title)}</button><p>${esc((n.excerpt||'').slice(0,160))}</p><div class="weekly-card-meta"><button class="news-favorite" data-collect-news="${esc(n.id)}" title="收藏网页" ${saved?'disabled':''}>${saved?'已收藏':'收藏'}</button><time>${esc(newsDateLabel(n))}</time></div></div></article>`;
+}
+document.addEventListener('error',e=>{
+ if(e.target.matches?.('[data-reading-cover]'))e.target.hidden=true;
+ if(e.target.matches?.('[data-article-image]')){e.target.hidden=true;e.target.closest('figure')?.classList.add('image-unavailable');}
+},true);
+let activeNewsId='';
+const newsImageAttempts=new Set(),newsReadsPending=new Set();
+function newsArticleContent(n){
+ if(!Array.isArray(n.content_blocks))return esc(n.content||n.excerpt||'');
+ return n.content_blocks.map(block=>{
+  if(block.type==='text')return `<div class="news-article-text">${esc(block.text)}</div>`;
+  if(block.type!=='image'||!/^[a-f0-9]{24}$/.test(block.id))return '';
+  const path=scoped('/api/news/'+encodeURIComponent(n.id)+'/images/'+block.id);
+  return `<figure class="news-article-image"><img src="${path}" alt="${esc(block.alt||'原文配图')}" loading="lazy" decoding="async" data-article-image><figcaption>原文图片暂不可用，可前往原文查看。</figcaption></figure>`;
+ }).join('');
+}
+function rememberReadingNews(n){
+ const items=state.weekly.news||[];const index=items.findIndex(item=>item.id===n.id);
+ if(index>=0)items[index]=n;else items.push(n);
+ state.weekly.news=items;
+}
+async function readNewsArticle(n){
+ if(!n||newsReadsPending.has(n.id))return;
+ const id=n.id;newsImageAttempts.add(id);newsReadsPending.add(id);
+ if(activeNewsId===id)renderNewsPreview(n);
+ try{
+  const result=await api('/api/news/enrich',{ids:[id],allow_remote:true});
+  if(!result.items?.[0])throw Error('未读取到文章');
+  n=result.items[0];rememberReadingNews(n);
+ }catch(error){n={...n,read_error:error.message};rememberReadingNews(n);}
+ finally{
+  newsReadsPending.delete(id);
+  if(activeNewsId===id&&$('#news-preview')?.open){
+   const scroll=$('#news-preview .news-preview-scroll')?.scrollTop||0;
+   renderNewsPreview(n);$('#news-preview .news-preview-scroll').scrollTop=scroll;
+  }
+ }
+}
+async function openNewsPreview(id){
+ const n=findReadingNews(id);if(!n)throw Error('文章不存在，请刷新后重试');
+ activeNewsId=id;
+ let dialog=$('#news-preview');if(!dialog){dialog=document.createElement('dialog');dialog.id='news-preview';document.body.append(dialog);}
+ renderNewsPreview(n);
+ if(!dialog.open)dialog.showModal();
+ if(n.content&&!Array.isArray(n.content_blocks)&&!newsImageAttempts.has(id))await readNewsArticle(n);
+}
+function renderNewsPreview(n){
+ const complete=Boolean(n.content),label=n.content_status==='browser'?'浏览器采集正文':complete?'已读取正文':'订阅源摘要 · 非全文';
+ const date=n.published_at?(n.published_label||new Date(n.published_at).toLocaleDateString('zh-CN')):[n.published_label?'页面时间：'+n.published_label:'发布日期未提供',newsDateLabel(n)].join(' · ');
+ const saved=(state.reading?.favorites||[]).includes(n.source_id);
+ const newsReadBusy=newsReadsPending.has(n.id);
+ const inlineImages=(n.content_blocks||[]).some(block=>block.type==='image');
+ $('#news-preview').innerHTML=`<header class="news-preview-toolbar"><span>${esc(newsSource(n))}</span><button data-news-preview-close aria-label="关闭文章预览">×</button></header><div class="news-preview-scroll">${n.cover_url&&!inlineImages?`<div class="news-preview-cover"><img src="${newsCoverPath(n)}" alt="${esc(n.title)} · 原文封面" data-reading-cover></div>`:''}<div class="news-preview-body"><div class="news-preview-meta"><span>${label}</span><time>${esc(date)}</time>${newsReadBusy?'<span role="status">正在补全图文…</span>':''}</div><h2>${esc(n.title)}</h2><div class="news-preview-copy">${newsArticleContent(n)}</div>${n.read_error?`<p class="news-read-error">${complete?'图文未能补全':'原文未能读取'}：${esc(n.read_error)}。${complete?'已保留现有正文。':'这里展示的仍是来源提供的摘要。'}</p>`:''}</div></div><footer class="news-preview-actions"><a href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">查看原文 ↗</a><div>${!complete||n.read_error?`<button data-news-read="${esc(n.id)}" ${newsReadBusy?'disabled':''}>${newsReadBusy?'读取中…':complete?'重试图文':'读取正文'}</button>`:''}<button data-news-reference="${esc(n.id)}">带入对话</button><button data-news-note="${esc(n.id)}">做笔记</button><button data-collect-news="${esc(n.id)}" ${saved?'disabled':''}>${saved?'已收藏':'收藏'}</button></div></footer>`;
+}
+async function openNewsNotes(n){
+ readerTarget={kind:'news',id:n.id};
+ $('#reader-title').textContent=n.title;$('#reader-type').textContent=newsSource(n)+' · 阅读笔记';
+ $('#reader-content').innerHTML=`<div class="news-reader-copy">${newsArticleContent(n)}</div>`;
+ $('#reader-actions').innerHTML=`<button class="secondary" data-news-return="${esc(n.id)}">返回文章</button><a class="text-button" href="${esc(n.url)}" target="_blank" rel="noopener noreferrer">查看原文 ↗</a>`;
+ $('#note-quote').value='';$('#note-text').value='';$('#note-error').textContent='';
+ await loadNotes();if(!$('#reader-dialog').open)$('#reader-dialog').showModal();
+}
+document.addEventListener('click',async e=>{
+ const b=e.target.closest('button');if(!b)return;
+ try{
+ if(b.hasAttribute('data-news-preview-close')){$('#news-preview').close();activeNewsId='';}
+ if(b.dataset.newsReference){const n=findReadingNews(b.dataset.newsReference);if(n){b.disabled=true;try{const r=await api('/api/news/reference',{id:n.id});await load();sourceIds.add(r.source_id);$('#news-preview').close();await switchView('home');render();$('#prompt').focus();}finally{b.disabled=false;}}}
+ if(b.dataset.newsNote){const n=findReadingNews(b.dataset.newsNote);if(n){$('#news-preview').close();await openNewsNotes(n);}}
+ if(b.dataset.newsReturn){$('#reader-dialog').close();await openNewsPreview(b.dataset.newsReturn);}
+ if(b.dataset.newsRead)await readNewsArticle(findReadingNews(b.dataset.newsRead));
+ }catch(error){toast(error.message);}
+});
+
+function favoriteNews(id){return (state.weekly.news||[]).find(n=>n.source_id===id)||(state.reading?.issues||[]).flatMap(p=>p.body.news||[]).find(n=>n.source_id===id);}
+function readingFavoriteCard(a){
+ const d=assetData(a.id),ext=assetExtension(a),article=favoriteNews(a.id);
+ const cover=ext==='board'?boardThumbnail(d.doc.body.scene,a.id):article?(article.cover_url?`<img src="${newsCoverPath(article)}" alt="${esc(a.title)} · 原文封面" loading="lazy" data-reading-cover>`:''):`<div class="favorite-paper">${esc(d.content.slice(0,180))}</div>`;
+ const action=article?`data-news-open="${esc(article.id)}"`:`data-favorite-open="${esc(a.id)}"`;
+ return `<div class="favorite-entry" draggable="true" data-favorite-drag="${esc(a.id)}"><button class="reading-favorite-card" ${action}><div class="favorite-cover ${article?'is-article-cover':''}">${cover}</div><strong>${esc(a.title)}</strong><small>${esc(article?newsSource(article):ext==='board'?'画板':ext.toUpperCase())}</small></button>${d.source?.url?`<a class="favorite-web-link" href="${esc(safeWebsite(d.source.url))}" target="_blank" rel="noopener noreferrer">打开网页 ↗</a>`:''}<button class="favorite-remove" data-favorite-remove="${esc(a.id)}" aria-label="取消收藏${esc(a.title)}">×</button></div>`;
+}
+
+const defaultReadingFocus=[
+ {name:'DeepSeek',kind:'官网',url:'https://api-docs.deepseek.com/updates',domains:['deepseek.com'],logo:'/brand/deepseek.svg',description:'开源模型、API 与开发者动态'},
+ {name:'豆包',kind:'官网',url:'https://www.doubao.com/',domains:['doubao.com','volcengine.com'],logo:'/brand/doubao.png',description:'字节跳动的 AI 助手与模型产品'},
+ {name:'OpenAI',kind:'官网',url:'https://openai.com/news/',domains:['openai.com'],logo:'/brand/openai.png',description:'ChatGPT、模型研究与产品更新'},
+ {name:'Claude',kind:'官网',url:'https://www.anthropic.com/news',domains:['anthropic.com','claude.com','claude.ai'],logo:'/brand/anthropic.png',description:'Anthropic 的 AI 助手与研究动态'}
+];
+function focusHostname(url){try{return new URL(url).hostname;}catch{return '';}}
+function focusMatches(f,n){
+ if(f.domains){const host=focusHostname(n.feed_url||n.url);return f.domains.some(domain=>host===domain||host.endsWith('.'+domain));}
+ return n.author_url===f.url||n.feed_url===f.url||n.url===f.url||n.source_name===f.name;
+}
+function focusDescription(f){
+ if(f.description?.trim())return f.description.trim();
+ return ({'官网':'产品介绍与官方更新','公众号':'关注这个账号的文章与观点','小红书账号':'关注这个账号的笔记与分享'})[f.kind]||'关注这个来源的新内容';
+}
+function focusLogo(f){
+ const logo=f.logo||(f.kind==='官网'&&f.id?scoped('/api/site-icon?id='+encodeURIComponent(f.id)):'');
+ const initial=Array.from(f.name||'').slice(0,/^[a-z]/i.test(f.name||'')?1:2).join('');
+ return `<span class="focus-logo" aria-hidden="true"><span>${esc(initial)}</span>${logo?`<img src="${esc(logo)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-focus-logo>`:''}</span>`;
+}
+function readingFocusCard(f){
+ const list=(state.weekly.news||[]).filter(n=>focusMatches(f,n)).sort((a,b)=>String(b.published_at||b.fetched_at||'').localeCompare(String(a.published_at||a.fetched_at||''))).slice(0,3);
+ // Social accounts share a hostname; only exact account matches belong on their cards.
+ const sources=list.length?[]:state.sources.filter(s=>!s.archived&&s.url&&(s.url===f.url||f.kind==='官网'&&(f.domains?focusMatches(f,s):focusHostname(s.url)===focusHostname(f.url)))).slice(0,2);
+ const updates=list.map(n=>`<button class="focus-update" data-news-open="${esc(n.id)}" title="${esc(n.title)}"><time>${esc(newsDateLabel(n))}</time><span>${esc(n.title)}</span></button>`).join('');
+ const saved=sources.map(s=>`<button class="focus-update focus-saved-update" data-source="${esc(s.id)}" title="${esc(s.title)}"><span>${esc(s.title)}</span></button>`).join('');
+ return `<article class="reading-focus"><a class="focus-identity" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer" aria-label="打开${esc(f.name)}${esc(f.kind)}">${focusLogo(f)}<span class="focus-identity-copy"><strong>${esc(f.name)}</strong><small>${esc(f.kind)}</small></span><svg class="icon focus-external" aria-hidden="true" viewBox="0 0 20 20"><path d="M6 14 14 6M6 6h8v8"/></svg></a><p class="focus-description" title="${esc(focusDescription(f))}">${esc(focusDescription(f))}</p><div class="focus-updates">${updates||saved||'<p class="focus-empty">暂无已采集动态</p>'}</div></article>`;
+}
+document.addEventListener('load',e=>{if(e.target.matches?.('[data-focus-logo]'))e.target.parentElement.classList.add('logo-loaded');},true);
+document.addEventListener('error',e=>{if(e.target.matches?.('[data-focus-logo]'))e.target.remove();},true);
 
 function renderDesk(){
  if(view!=='work')return;
  if(!readingCollectionLoaded){readingCollectionLoaded=true;api('/api/reading/items').then(items=>{readingCollection=items;renderDesk();}).catch(()=>{readingCollectionLoaded=false;});}
  const subscriptions=readingSubscriptions(),runs=state.weekly.runs||[];
- const savedIssues=(state.reading?.issues||[]).map(p=>({...p,updated:p.created,news:p.body.news,snapshot:true}));
- const issues=[...savedIssues,...pages().filter(p=>p.body.tags.includes('周刊')),...(new URLSearchParams(location.search).get('readingPreview')==='1'?readingSampleIssues:[])].sort((a,b)=>new Date(b.updated)-new Date(a.updated));
- const issue=readingIssueId==='latest'?null:issues.find(p=>p.id===readingIssueId);
+ const updateState=state.reading?.updates,updating=newsRefreshing||!!updateState?.current;
+ const schedule=updateState?.schedule;
+ const updateWarnings=newsWarnings.length||updateState?.last_run?.warnings?.length||updateState?.last_run?.read_warnings?.length||updateState?.last_run?.error;
+ const savedIssues=(state.reading?.issues||[]).map(p=>({...p,updated:p.body.period_start||p.created,news:p.body.news,snapshot:true}));
+ const weeklyIssues=savedIssues.filter(p=>p.body.period_start).sort((a,b)=>b.body.period_start.localeCompare(a.body.period_start));
+ const issues=weeklyIssues.length?weeklyIssues:[...savedIssues,...pages().filter(p=>p.body.tags.includes('周刊'))].sort((a,b)=>new Date(b.updated)-new Date(a.updated));
+ const latestIssue=weeklyIssues[0]||null;
+ const issue=readingIssueId==='latest'?latestIssue:issues.find(p=>p.id===readingIssueId);
  const issueSources=issue?new Set((issue.body.citations||[]).map(c=>c.source_id)):null;
- const news=(issue?.sample||issue?.snapshot?issue.news:(state.weekly.news||[])).filter(n=>(issue?.sample||issue?.snapshot||!issueSources||issueSources.has(n.source_id))&&(readingCategory==='all'||topicFor(n)===readingCategory)).sort((a,b)=>{const release=n=>/github\.com/.test(n.feed_url||'');const preview=n=>/alpha|beta|^pr-|^rust-/i.test(n.title);return Number(release(a))-Number(release(b))||Number(preview(a))-Number(preview(b))||(new Date(b.published_at||0)-new Date(a.published_at||0));});
+ const news=(issue?.snapshot?issue.news:(state.weekly.news||[])).filter(n=>(issue?.snapshot||!issueSources||issueSources.has(n.source_id))&&(readingCategory==='all'||topicFor(n)===readingCategory));
  if(favoriteCategory!=='all'&&!(state.reading?.groups||[]).includes(favoriteCategory))favoriteCategory='all';
  const favoriteIds=new Set([...(state.reading?.favorites||[]),...state.sources.filter(s=>state.asset_meta?.[s.id]?.favorite).map(s=>s.id),...readingCollection.map(i=>i.source_id)]);
  const ordered=state.reading?.favorites||[];const favorites=catalogItems().filter(a=>favoriteIds.has(a.id)).sort((a,b)=>{const index=id=>ordered.includes(id)?ordered.indexOf(id):9999;return index(a.id)-index(b.id);});
- const defaultFocus=[{name:'DeepSeek',match:/deepseek/i,url:'https://api-docs.deepseek.com/updates'},{name:'豆包',match:/doubao|volcengine|豆包/i,url:'https://www.doubao.com/'},{name:'OpenAI',match:/^https:\/\/openai\.com\//i,url:'https://openai.com/news/'},{name:'Claude',match:/anthropic|claude/i,url:'https://www.anthropic.com/news'}];
- const focus=[...defaultFocus.map(f=>({...f,kind:'官网'})),...(state.reading?.focus||[]).map(f=>({...f,match:null}))];
- $('#work-content').innerHTML=`<div class="reading-dashboard reading-sketch"><div class="reading-main-column"><section class="reading-block weekly-surface"><header class="weekly-heading"><div><h2>周刊</h2></div><div class="weekly-header-actions"><button data-reading-manage aria-label="来源管理" title="来源设置">来源管理</button><button class="weekly-update-button" data-update-current ${newsRefreshing?'disabled':''}>${newsRefreshing?'更新中…':'更新本期'}</button></div></header><nav class="weekly-issue-tabs"><button data-reading-issue="latest" class="${readingIssueId==='latest'?'active':''}">最新周刊<small>${weekRange(new Date())}</small></button>${issues.filter(p=>weekRange(new Date(p.updated))!==weekRange(new Date())).slice(0,5).map((p,i)=>`<button data-reading-issue="${esc(p.id)}" class="${readingIssueId===p.id?'active':''}" title="${esc(p.title)}${p.sample?'（模拟）':''}">第 ${issues.length-i} 期<small>${weekRange(new Date(p.updated))}</small></button>`).join('')}</nav><nav class="reading-topic-tabs">${readingTopics.map(t=>`<button data-reading-topic="${t==='全部'?'all':t}" class="${readingCategory===(t==='全部'?'all':t)?'active':''}">${t}</button>`).join('')}</nav>${issue?`<div class="selected-issue"><span>${esc(issue.title)}${issue.sample?' · 模拟':''}</span><button data-desk-issue="${esc(issue.id)}">阅读本期 ↗</button></div>`:''}${newsWarnings.length?'<p class="error">部分来源未更新。</p>':''}<div class="weekly-card-grid">${news.map(n=>`<article class="weekly-article-card"><button class="weekly-cover" data-news-open="${esc(n.id)}"><span>${esc(topicFor(n))}</span><b>${esc(newsSource(n).includes('GitHub')?'GH':newsSource(n).split('.')[0].slice(0,2).toUpperCase())}</b></button><div class="weekly-card-content"><button class="news-title" data-news-open="${esc(n.id)}">${esc(n.title)}</button><p>${esc(n.excerpt.slice(0,150))}</p><div class="weekly-card-meta"><button class="news-favorite" data-collect-news="${esc(n.id)}" title="收藏网页">收藏</button><time>${n.published_at?new Date(n.published_at).toLocaleDateString('zh-CN',{month:'2-digit',day:'2-digit'}):'日期未提供'}</time></div></div></article>`).join('')||'<div class="reading-empty">暂无文章，更新来源后在这里阅读。</div>'}</div></section><section class="reading-block reading-favorites"><div class="reading-block-head"><h2>我的收藏</h2><details class="favorite-add-menu"><summary aria-label="添加收藏" title="添加到当前分类">＋</summary><div><button data-favorite-picker>从资产添加</button><button data-favorite-local>从本地添加</button></div></details></div><nav class="reading-topic-tabs"><button data-favorite-category="all" class="${favoriteCategory==='all'?'active':''}">全部</button>${(state.reading?.groups||[]).map(name=>`<button data-favorite-category="${esc(name)}" class="${favoriteCategory===name?'active':''}">${esc(name)}</button>`).join('')}<button data-favorite-group-manager aria-label="管理收藏分类" title="管理分类"><svg class="icon"><use href="#i-settings"/></svg></button></nav><div class="favorite-card-grid">${favorites.filter(a=>favoriteCategory==='all'||(state.reading?.favorite_categories?.[a.id]||'')===favoriteCategory).map(a=>{const d=assetData(a.id),ext=assetExtension(a);return `<div class="favorite-entry" draggable="true" data-favorite-drag="${esc(a.id)}"><button class="reading-favorite-card" data-favorite-open="${esc(a.id)}"><div class="favorite-cover">${ext==='board'?boardThumbnail(d.doc.body.scene,a.id):`<div class="favorite-paper">${esc(d.content.slice(0,180))}</div>`}</div><strong>${esc(a.title)}</strong><small>${collectionMode==='专题'?esc(state.reading?.favorite_categories?.[a.id]||'Personal Agent')+' · ':''}${esc(ext==='board'?'画板':ext.toUpperCase())}</small></button>${d.source?.url?`<a class="favorite-web-link" href="${esc(safeWebsite(d.source.url))}" target="_blank" rel="noopener noreferrer">打开网页 ↗</a>`:''}<button class="favorite-remove" data-favorite-remove="${esc(a.id)}" aria-label="取消收藏${esc(a.title)}">×</button></div>`;}).join('')||'<div class="reading-empty">把想反复阅读的资产放在这里。</div>'}</div></section></div><aside class="reading-block reading-focus-panel"><div class="reading-block-head"><h2>重点关注</h2><button data-focus-manager>＋</button></div><div class="focus-source-types"><span>官网</span><span>公众号</span><span>小红书账号</span></div>${focus.map(f=>{const list=(state.weekly.news||[]).filter(n=>f.match?f.match.test(n.feed_url):n.url===f.url).slice(0,3);return `<div class="reading-focus"><a href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">${esc(f.name)}<span>${esc(f.kind)} ↗</span></a>${list.length?list.map(n=>`<button data-news-open="${esc(n.id)}"><time>${n.published_at?new Date(n.published_at).toLocaleDateString('zh-CN',{month:'2-digit',day:'2-digit'}):'—'}</time><span>${esc(n.title)}</span></button>`).join(''):state.sources.filter(s=>s.url&&new URL(s.url).hostname===new URL(f.url).hostname).slice(0,2).map(s=>`<button data-source="${esc(s.id)}"><span>${esc(s.title)}</span></button>`).join('')||'<p>暂无已采集动态</p>'}</div>`;}).join('')}<div class="focus-manual-note">公众号、小红书内容暂通过链接或资产手动添加。</div></aside></div>`;
+ const focus=[...defaultReadingFocus,...(state.reading?.focus||[])];
+ $('#work-content').innerHTML=`<div class="reading-dashboard reading-sketch"><div class="reading-main-column"><section class="reading-block weekly-surface"><header class="weekly-heading"><div><h2>周刊</h2></div><div class="weekly-header-actions"><button data-reading-manage aria-label="来源管理" title="来源设置">来源管理</button><button class="weekly-update-button" data-update-current ${updating?'disabled':''}>${updating?'更新中…':'手动更新'}</button><button data-reading-schedule class="${schedule?.enabled?'schedule-enabled':''}" title="${schedule?.enabled?esc(scheduleLabel(schedule))+' · 北京时间':'设置更新时间'}">定时更新</button></div></header><nav class="weekly-issue-tabs"><button data-reading-issue="latest" class="${readingIssueId==='latest'?'active':''}">最新周刊<small>${issuePeriodLabel(latestIssue)}</small></button>${issues.filter(p=>p.id!==latestIssue?.id&&(!latestIssue?weekRange(new Date(p.updated))!==weekRange(new Date()):true)).slice(0,5).map((p,i)=>`<button data-reading-issue="${esc(p.id)}" class="${readingIssueId===p.id?'active':''}" title="${esc(p.title)}">第 ${issues.length-i-1} 期<small>${issuePeriodLabel(p)}</small></button>`).join('')}</nav><nav class="reading-topic-tabs">${readingTopics.map(t=>`<button data-reading-topic="${t==='全部'?'all':t}" class="${readingCategory===(t==='全部'?'all':t)?'active':''}">${t}</button>`).join('')}</nav><div class="selected-issue"><span>${issue?esc(issue.title):'按发布时间收录'} · ${news.length} 篇</span>${issue?`<button data-desk-issue="${esc(issue.id)}">本期目录 ↗</button>`:''}${updateWarnings?'<button class="reading-update-warning" data-reading-schedule>查看更新情况</button>':''}</div><div class="weekly-card-grid">${news.map(readingArticleCard).join('')||'<div class="reading-empty">暂无文章，更新来源后在这里阅读。</div>'}</div></section><section class="reading-block reading-favorites"><div class="reading-block-head"><h2>我的收藏</h2><details class="favorite-add-menu"><summary aria-label="添加收藏" title="添加到当前分类">＋</summary><div><button data-favorite-picker>从资产添加</button><button data-favorite-local>从本地添加</button><button data-capture-open>从网页采集</button></div></details></div><nav class="reading-topic-tabs"><button data-favorite-category="all" class="${favoriteCategory==='all'?'active':''}">全部</button>${(state.reading?.groups||[]).map(name=>`<button data-favorite-category="${esc(name)}" class="${favoriteCategory===name?'active':''}">${esc(name)}</button>`).join('')}<button data-favorite-group-manager aria-label="管理收藏分类" title="管理分类"><svg class="icon"><use href="#i-settings"/></svg></button></nav><div class="favorite-card-grid">${favorites.filter(a=>favoriteCategory==='all'||(state.reading?.favorite_categories?.[a.id]||'')===favoriteCategory).map(readingFavoriteCard).join('')||'<div class="reading-empty">把想反复阅读的资产放在这里。</div>'}</div></section></div><aside class="reading-block reading-focus-panel"><div class="reading-block-head"><h2>重点关注</h2><button data-focus-manager aria-label="管理重点关注" title="管理重点关注">＋</button></div><div class="focus-source-types"><span>官网</span><span>公众号</span><span>小红书账号</span></div><div class="focus-card-list">${focus.map(readingFocusCard).join('')}</div><div class="focus-manual-note">公众号、小红书需要登录时，打开浏览器完成后采集。</div><div class="reading-capture-entry"><button data-capture-open>采集文章 ↗</button></div></aside></div>`;
 }
 
 function renderUsage(){
@@ -54,20 +188,20 @@ document.addEventListener('click',async e=>{
  try{
   if(d.workTab){workTab=d.workTab;deskSignature='';renderDesk();if(workTab==='usage'&&!usageSnapshot)refreshUsage();}
   if(d.view==='work'&&workTab==='usage'&&!usageSnapshot)refreshUsage();
-  if(d.deskIssue){const archived=(state.reading?.issues||[]).find(p=>p.id===d.deskIssue);if(archived){openSampleReading(archived.title,archived.body.news.map(n=>'## '+n.title+'\n\n'+n.excerpt+'\n\n[原文]('+n.url+')').join('\n\n'),false);return;}const sample=readingSampleIssues.find(p=>p.id===d.deskIssue);if(sample)openSampleReading(sample.title,sample.body.content);else await openDocument(d.deskIssue);}
+  if(d.deskIssue){const archived=(state.reading?.issues||[]).find(p=>p.id===d.deskIssue);if(archived){openReadingSnapshot(archived.title,archived.body.news.map(n=>'## '+n.title+'\n\n'+n.excerpt+'\n\n[原文]('+n.url+')').join('\n\n'));return;}await openDocument(d.deskIssue);}
   if(d.backReading!==undefined){workTab='reading';deskSignature='';await switchView('work');}
   if(d.readingFilter){readingFilter=d.readingFilter;deskSignature='';renderDesk();}
 
   if(d.newsRefresh){await refreshNews(d.newsRefresh);}
  if(d.newsGenerate){await generateNews(d.newsGenerate);}
- if(d.newsOpen){const sample=readingSampleIssues.flatMap(p=>p.news).find(n=>n.id===d.newsOpen);if(sample)openSampleReading(sample.title,sample.excerpt);else{const n=(state.weekly.news||[]).find(n=>n.id===d.newsOpen);if(n)await openReader('source',n.source_id);}}
+ if(d.newsOpen)await openNewsPreview(d.newsOpen);
  if(d.subscriptionRemove){const c=readingSubscriptions().find(c=>c.id===d.subscriptionRemove);if(!c)return;if(!await confirm('移除「'+c.title+'」？','停止这个订阅的后续更新。已保存的阅读内容、原文和更新记录仍保留在「全部更新」中。'))return;await api('/api/weekly/remove',{id:c.id,revision:c.revision});await load();toast('订阅已移除，已有内容保留');}
   if(d.usageRefresh!==undefined)await refreshUsage();
   if(d.balanceRefresh!==undefined){if(!await confirm('查询 DeepSeek 账户余额？','仅使用本机已配置的 API Key，发送给官方 api.deepseek.com/user/balance。不会发送文档或对话，不生成模型内容。'))return;balanceLoading=true;balanceError='';renderUsage();try{balanceSnapshot=await api('/api/model/balance',{allow_remote:true});}catch(error){balanceError=error.message;}finally{balanceLoading=false;deskSignature='';renderUsage();}}
  }catch(error){toast(error.message);}
 });
 
-function newsSource(n){const u=new URL(n.feed_url);return u.hostname==='github.com'?u.pathname.split('/').slice(1,3).join('/')+' · GitHub':u.hostname;}
+function newsSource(n){if(n.source_name)return n.source_name;const u=new URL(n.feed_url||n.url);return u.hostname==='github.com'?u.pathname.split('/').slice(1,3).join('/')+' · GitHub':u.hostname;}
 function newsSection(subscriptions){
  const list=(state.weekly.news||[]).filter(n=>readingFilter==='all'||n.subscription_id===readingFilter);
  const selected=(state.weekly.news||[]).filter(n=>newsSelection.has(n.id)),subscription=selected[0]?.subscription_id;
@@ -110,11 +244,104 @@ document.addEventListener('click',async e=>{
  if(b.hasAttribute('data-test-all-sources')){if(sourceTesting)return;sourceTesting=true;sourceManager();try{const r=await api('/api/news/test',{allow_remote:true});sourceTestResults=r.results;}catch(err){toast(err.message);}finally{sourceTesting=false;sourceManager();}}
 });
 
-function openSampleReading(title,content,sample=true){let d=$('#sample-reading');if(!d){d=document.createElement('dialog');d.id='sample-reading';document.body.append(d);}d.innerHTML=`<header><strong>${esc(title)}</strong><button aria-label="关闭模拟周刊">×</button></header><small>${sample?'模拟内容 · 不作为真实历史资讯':'保存的来源摘要 · 非全文'}</small><div class="markdown">${md(content)}</div>`;d.querySelector('button').onclick=()=>d.close();d.showModal();}
-document.addEventListener('click',async e=>{if(!e.target.closest('[data-update-current]'))return;if(newsRefreshing)return;const configs=readingSubscriptions();if(!configs.length){sourceManager();return;}newsRefreshing=true;renderDesk();let added=0,successful=0;newsWarnings=[];try{for(const config of configs){try{const r=await api('/api/news/refresh',{id:config.id,allow_remote:true});added+=r.added;if(!(r.warnings||[]).length)successful++;newsWarnings.push(...(r.warnings||[]));}catch(err){newsWarnings.push({url:config.title,error:err.message});}}if(successful>0)await api('/api/reading/snapshot',{});await load();readingIssueId='latest';toast(newsWarnings.length?'更新完成，部分来源未成功':'已更新 · 新增 '+added+' 条');}finally{newsRefreshing=false;renderDesk();}});
+function openReadingSnapshot(title,content){let d=$('#reading-snapshot');if(!d){d=document.createElement('dialog');d.id='reading-snapshot';document.body.append(d);}d.innerHTML=`<header><strong>${esc(title)}</strong><button aria-label="关闭历史周刊">×</button></header><small>保存的来源摘要 · 非全文</small><div class="markdown">${md(content)}</div>`;d.querySelector('button').onclick=()=>d.close();d.showModal();}
+async function updateCurrentReading(){
+ if(newsRefreshing||state.reading?.updates?.current)return;
+ if(!readingSubscriptions().some(c=>c.urls.length)){sourceManager();return;}
+ newsRefreshing=true;newsWarnings=[];renderDesk();
+ try{
+  const run=await api('/api/reading/update',{allow_remote:true});
+  state.reading.updates={...state.reading.updates,current:run,last_run:run};
+  readingIssueId='latest';watchReadingUpdates();
+ }catch(error){toast(error.message);}finally{newsRefreshing=false;renderDesk();}
+}
+document.addEventListener('click',e=>{if(e.target.closest('[data-update-current]'))updateCurrentReading();});
+
+function watchReadingUpdates(){
+ if(readingUpdateTimer!==null||readingUpdatePolling)return;
+ const updates=state.reading?.updates;
+ if(!updates?.current&&!updates?.schedule?.enabled)return;
+ readingUpdateTimer=setTimeout(pollReadingUpdates,updates.current?1800:15000);
+}
+async function pollReadingUpdates(){
+ readingUpdateTimer=null;readingUpdatePolling=true;
+ const before=state.reading?.updates;
+ try{
+  const next=await api('/api/reading/updates');
+  const changed=JSON.stringify(before)!==JSON.stringify(next);
+  state.reading.updates=next;
+  if(changed){
+   const run=next.last_run;
+   if(run&&!next.current){
+    newsWarnings=run.warnings||[];await load();
+    toast(run.error|| (run.status==='partial'?'已更新 · 部分来源或正文暂不可用':'已更新 · 新增 '+run.added+' 条'));
+   }else renderDesk();
+   if($('#reading-schedule-dialog')?.open)renderReadingUpdateStatus();
+  }
+ }catch(error){state.reading.updates=before;if(view==='work')toast('更新状态暂不可用，稍后重试');}
+ finally{readingUpdatePolling=false;watchReadingUpdates();}
+}
+function readingScheduleTime(value){
+ return value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}):'';
+}
+function readingScheduleDefaults(){return {enabled:false,frequency:'weekly',weekday:0,time:'09:00',revision:0};}
+function syncReadingScheduleForm(){
+ const enabled=$('#reading-auto-enabled').checked,weekly=$('#reading-auto-frequency').value==='weekly';
+ $('#reading-auto-fields').disabled=!enabled;
+ $('#reading-auto-weekday').disabled=!enabled||!weekly;
+ $('#reading-auto-weekday-field').classList.toggle('schedule-field-inactive',!weekly);
+}
+function renderReadingUpdateStatus(){
+ const updates=state.reading?.updates,config=updates?.schedule,run=updates?.last_run;
+ const statuses={running:'更新中',completed:'更新完成',partial:'部分更新',failed:'更新失败',interrupted:'更新中断'};
+ const next=config?.enabled?'下次更新：'+readingScheduleTime(config.next_run):'定时更新未开启';
+ const last=run?`${statuses[run.status]||run.status} · ${readingScheduleTime(run.finished||run.started)}${run.status==='completed'?' · 新增 '+run.added+' 条':''}`:'暂无更新记录';
+ const warnings=[...(run?.warnings||[]),...(run?.read_warnings||[])];
+ $('#reading-auto-status').innerHTML=`<p>${esc(next)}</p><p>${esc(last)}</p>${run?.error?`<p class="error">${esc(run.error)}</p>`:''}${warnings.length?`<details><summary>查看 ${warnings.length} 条采集说明</summary>${warnings.map(w=>`<p>${esc(w.url||findReadingNews(w.id)?.title||'正文读取')}：${esc(w.error)}</p>`).join('')}</details>`:''}`;
+}
+async function readingScheduleDialog(){
+ try{state.reading.updates=await api('/api/reading/updates');}
+ catch(error){toast('暂时无法读取定时设置，请重试');return;}
+ let d=$('#reading-schedule-dialog');if(!d){d=document.createElement('dialog');d.id='reading-schedule-dialog';document.body.append(d);}
+ const c=state.reading?.updates?.schedule||readingScheduleDefaults();
+ d.setAttribute('aria-labelledby','reading-auto-title');
+ d.innerHTML=`<form id="reading-auto-form"><header><h2 id="reading-auto-title">定时更新</h2><button type="button" data-reading-schedule-close aria-label="关闭定时更新">×</button></header><div class="reading-auto-body"><label class="reading-auto-toggle"><span>自动更新周刊</span><input id="reading-auto-enabled" type="checkbox" role="switch" ${c.enabled?'checked':''}><span class="reading-auto-switch" aria-hidden="true"></span></label><fieldset id="reading-auto-fields"><div class="reading-auto-fields"><label>更新频率<select id="reading-auto-frequency"><option value="daily" ${c.frequency==='daily'?'selected':''}>每天</option><option value="weekly" ${c.frequency==='weekly'?'selected':''}>每周</option></select></label><label id="reading-auto-weekday-field">星期<select id="reading-auto-weekday">${['周一','周二','周三','周四','周五','周六','周日'].map((name,i)=>`<option value="${i}" ${c.weekday===i?'selected':''}>${name}</option>`).join('')}</select></label><label>时间<input id="reading-auto-time" type="time" value="${esc(c.time)}" required></label></div></fieldset><p class="reading-auto-hint">北京时间 · 需电脑与积木服务保持运行。<br>按来源管理抓取公开更新，不调用付费模型。</p><div id="reading-auto-status" aria-live="polite"></div><p id="reading-auto-error" class="error" role="alert"></p></div><footer><button type="button" class="secondary" data-reading-schedule-close>取消</button><button class="primary" id="reading-auto-save">保存</button></footer></form>`;
+ d.querySelectorAll('[data-reading-schedule-close]').forEach(b=>b.onclick=()=>d.close());
+ $('#reading-auto-enabled').onchange=syncReadingScheduleForm;
+ $('#reading-auto-frequency').onchange=syncReadingScheduleForm;
+ syncReadingScheduleForm();renderReadingUpdateStatus();
+ d.querySelector('form').onsubmit=async e=>{
+  e.preventDefault();const save=$('#reading-auto-save');save.disabled=true;$('#reading-auto-error').textContent='';
+  const data={enabled:$('#reading-auto-enabled').checked,frequency:$('#reading-auto-frequency').value,weekday:Number($('#reading-auto-weekday').value),time:$('#reading-auto-time').value,revision:c.revision};
+  try{
+   const schedule=await api('/api/reading/schedule',data);
+   state.reading.updates={...state.reading.updates,schedule};
+   d.close();renderDesk();watchReadingUpdates();toast(schedule.enabled?'已开启 · '+scheduleLabel(schedule):'已保存 · 定时更新关闭');
+  }catch(error){$('#reading-auto-error').textContent=error.message;}
+  finally{save.disabled=false;}
+ };
+ if(!d.open)d.showModal();
+}
+document.addEventListener('click',e=>{if(e.target.closest('[data-reading-schedule]'))readingScheduleDialog();});
 
 function favoritePicker(){let d=$('#favorite-picker');if(!d){d=document.createElement('dialog');d.id='favorite-picker';document.body.append(d);}d.innerHTML=`<header><h2>从资产添加收藏</h2><button data-favorite-close>×</button></header><div class="favorite-picker-list">${catalogItems().map(a=>`<button data-favorite-add="${esc(a.id)}">${assetIcon(assetExtension(a))}<span>${esc(a.title)}</span><small>${(state.reading?.favorites||[]).includes(a.id)?'已收藏':'＋'}</small></button>`).join('')||'<p class="empty">先上传文件或保存文稿</p>'}</div>`;if(!d.open)d.showModal();}
-function focusManager(){let d=$('#focus-manager');if(!d){d=document.createElement('dialog');d.id='focus-manager';document.body.append(d);}d.innerHTML=`<header><h2>重点关注</h2><button data-focus-close>×</button></header><form id="focus-form"><input id="focus-name" placeholder="名称" maxlength="60" required><select id="focus-kind"><option>官网</option><option>公众号</option><option>小红书账号</option></select><input id="focus-url" type="url" placeholder="https://…" required><button class="primary">添加</button><p id="focus-error" class="error"></p></form><div>${(state.reading?.focus||[]).map(f=>`<div class="focus-manager-row"><a href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">${esc(f.name)}</a><small>${esc(f.kind)}</small><button data-focus-remove="${esc(f.id)}">移除</button></div>`).join('')}</div>`;d.querySelector('form').onsubmit=async e=>{e.preventDefault();try{await api('/api/reading/focus',{name:$('#focus-name').value,kind:$('#focus-kind').value,url:$('#focus-url').value});await load();focusManager();renderDesk();}catch(err){$('#focus-error').textContent=err.message;}};if(!d.open)d.showModal();}
+function focusManager(id){
+ let d=$('#focus-manager');if(!d){d=document.createElement('dialog');d.id='focus-manager';document.body.append(d);}
+ const focus=(state.reading?.focus||[]).find(f=>f.id===id);
+ d.setAttribute('aria-labelledby','focus-manager-title');
+ d.innerHTML=`<header><h2 id="focus-manager-title">重点关注</h2><button data-focus-close aria-label="关闭重点关注管理">×</button></header><div class="focus-manager-body"><form id="focus-form"><div class="focus-form-identity"><label for="focus-name">名称<input id="focus-name" placeholder="网站或账号名称" maxlength="60" value="${esc(focus?.name||'')}" required></label><label for="focus-kind">来源<select id="focus-kind">${['官网','公众号','小红书账号'].map(kind=>`<option ${kind===focus?.kind?'selected':''}>${kind}</option>`).join('')}</select></label></div><label for="focus-url">地址<input id="focus-url" type="url" placeholder="https://…" value="${esc(focus?.url||'')}" required></label><label for="focus-description">简介 <span>可选</span><input id="focus-description" placeholder="一句话介绍这个来源，或写下你关注的内容" maxlength="160" value="${esc(focus?.description||'')}"></label><div class="focus-form-actions"><p id="focus-error" class="error" role="status"></p>${focus?'<button type="button" data-focus-cancel>取消</button>':''}<button type="submit" class="primary">${focus?'保存':'添加关注'}</button></div></form><div class="focus-manager-list">${(state.reading?.focus||[]).map(f=>`<div class="focus-manager-row">${focusLogo(f)}<a href="${esc(f.url)}" target="_blank" rel="noopener noreferrer"><strong>${esc(f.name)}</strong><span>${esc(f.description||f.kind)}</span></a><button data-focus-edit="${esc(f.id)}" aria-label="编辑${esc(f.name)}">编辑</button><button data-focus-remove="${esc(f.id)}" aria-label="移除${esc(f.name)}">移除</button></div>`).join('')}</div></div>`;
+ const form=d.querySelector('form');
+ form.onsubmit=async e=>{
+  e.preventDefault();const button=form.querySelector('[type="submit"]');if(button.disabled)return;
+  const data={...(focus?{id:focus.id}:{}),name:$('#focus-name').value,kind:$('#focus-kind').value,url:$('#focus-url').value,description:$('#focus-description').value};
+  const controls=[...d.querySelectorAll('.focus-manager-body button,.focus-manager-body input,.focus-manager-body select')];controls.forEach(control=>control.disabled=true);
+  try{await api('/api/reading/focus',data);await load();if(d.open)focusManager();renderDesk();}
+  catch(err){$('#focus-error').textContent=err.message;controls.forEach(control=>control.disabled=false);}
+ };
+ if(!d.open)d.showModal();
+ if(focus)$('#focus-description').focus();
+}
+document.addEventListener('click',e=>{const b=e.target.closest('button');if(b?.dataset.focusEdit)focusManager(b.dataset.focusEdit);if(b?.hasAttribute('data-focus-cancel'))focusManager();});
 document.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b)return;try{if(b.hasAttribute('data-favorite-picker'))favoritePicker();if(b.hasAttribute('data-favorite-close'))$('#favorite-picker').close();if(b.dataset.favoriteAdd){await api('/api/reading/favorite',{id:b.dataset.favoriteAdd,category:favoriteCategory});await load();favoritePicker();renderDesk();}if(b.dataset.favoriteRemove){await api('/api/reading/favorite',{id:b.dataset.favoriteRemove,remove:true});const old=readingCollection.find(i=>i.source_id===b.dataset.favoriteRemove);if(old){await api('/api/reading/items/remove',{source_id:b.dataset.favoriteRemove});readingCollection=readingCollection.filter(i=>i!==old);}if(state.asset_meta?.[b.dataset.favoriteRemove]?.favorite)await api('/api/assets/meta',{id:b.dataset.favoriteRemove,category:state.asset_meta[b.dataset.favoriteRemove].category,favorite:false});await load();renderDesk();}if(b.dataset.favoriteOpen){const a=catalogItems().find(a=>a.id===b.dataset.favoriteOpen);libraryCategory=a.category_id||'all';libraryOrigin=state.categories.find(c=>c.id===a.category_id)?.scope||(a.origin==='ai'?'creations':'materials');await switchView('sources');await selectAssetFile(a.id);}if(b.hasAttribute('data-focus-manager'))focusManager();if(b.hasAttribute('data-focus-close'))$('#focus-manager').close();if(b.dataset.focusRemove){await api('/api/reading/focus/remove',{id:b.dataset.focusRemove});await load();focusManager();renderDesk();}}catch(err){toast(err.message);}});
 
 let favoriteCategory='all',collectionMode='收藏';
@@ -127,7 +354,7 @@ document.addEventListener('dragover',e=>{const card=e.target.closest('[data-favo
 document.addEventListener('dragleave',e=>e.target.closest('[data-favorite-drag]')?.classList.remove('favorite-drop-target'));
 document.addEventListener('drop',async e=>{const card=e.target.closest('[data-favorite-drag]'),id=favoriteDragId;favoriteDragId=null;if(!card||!id)return;e.preventDefault();document.querySelectorAll('.favorite-drop-target').forEach(c=>c.classList.remove('favorite-drop-target'));const target=card.dataset.favoriteDrag;if(id===target)return;try{const visible=[...document.querySelectorAll('[data-favorite-drag]')].map(c=>c.dataset.favoriteDrag);for(const ident of visible)if(!(state.reading?.favorites||[]).includes(ident))await api('/api/reading/favorite',{id:ident,category:favoriteCategory});const order=visible.filter(i=>i!==id),index=order.indexOf(target);order.splice(index,0,id);await api('/api/reading/favorite/order',{ids:order});await load();renderDesk();}catch(err){toast(err.message);}});
 document.addEventListener('dragend',()=>{favoriteDragId=null;document.querySelectorAll('.favorite-drop-target').forEach(c=>c.classList.remove('favorite-drop-target'));});
-document.addEventListener('click',async e=>{const b=e.target.closest('[data-collect-news]');if(!b)return;try{const n=(state.weekly.news||[]).find(n=>n.id===b.dataset.collectNews);if(!n)return;await api('/api/reading/favorite',{id:n.source_id,category:favoriteCategory});await load();renderDesk();toast('已收藏网页资料');}catch(err){toast(err.message);}});
+document.addEventListener('click',async e=>{const b=e.target.closest('[data-collect-news]');if(!b||b.disabled)return;try{const n=findReadingNews(b.dataset.collectNews);if(!n)return;b.disabled=true;await api('/api/reading/favorite',{id:n.source_id,category:favoriteCategory});await load();renderDesk();if($('#news-preview')?.open&&activeNewsId===n.id){const saved=$('#news-preview [data-collect-news]');if(saved){saved.disabled=true;saved.textContent='已收藏';}}toast('已收藏网页资料');}catch(err){b.disabled=false;toast(err.message);}});
 
 function favoriteGroupManager(){let dialog=$('#favorite-group-manager');if(!dialog){dialog=document.createElement('dialog');dialog.id='favorite-group-manager';document.body.append(dialog);}dialog.innerHTML=`<header><h2>管理分类</h2><button data-close-favorite-groups aria-label="关闭分类管理">×</button></header><form id="favorite-group-form"><input id="favorite-group-name" maxlength="40" placeholder="新分类名称" required><button class="secondary">新增</button></form><div>${(state.reading?.groups||[]).map(name=>`<div class="favorite-group-row"><span>${esc(name)}</span><button data-delete-favorite-group="${esc(name)}">删除</button></div>`).join('')}</div><p id="favorite-group-error" class="error"></p>`;dialog.querySelector('form').onsubmit=async e=>{e.preventDefault();try{await api('/api/reading/groups',{name:$('#favorite-group-name').value});await load();renderDesk();favoriteGroupManager();}catch(err){$('#favorite-group-error').textContent=err.message;}};if(!dialog.open)dialog.showModal();}
 document.addEventListener('click',async e=>{const button=e.target.closest('button');if(!button)return;if(button.hasAttribute('data-favorite-group-manager'))favoriteGroupManager();if(button.hasAttribute('data-close-favorite-groups'))$('#favorite-group-manager').close();if(button.dataset.deleteFavoriteGroup){const name=button.dataset.deleteFavoriteGroup;if(!await confirm('删除「'+name+'」分类？','收藏内容不删除，仍保留在全部中。'))return;try{await api('/api/reading/groups',{name,remove:true});await load();renderDesk();favoriteGroupManager();}catch(err){$('#favorite-group-error').textContent=err.message;}}button.closest('.favorite-add-menu')?.removeAttribute('open');});

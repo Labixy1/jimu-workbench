@@ -13,7 +13,7 @@ const block=app.slice(app.indexOf('async function submit()'),app.indexOf('functi
 assert(!block.includes('confirm('),'ordinary send has no confirmation dialog');
 assert(block.includes('send_to_model:true'));
 assert(block.includes('board_refs:'));
-assert(app.includes('conversation-kind'));
+assert(!app.includes('conversation-kind'),'recent conversations have titles, not task labels');
 const nodes=new Map([['#prompt',{value:'hello'}],['#use-retrieval',{checked:false}],['#send-button',{disabled:false}]]);
 let sent=0,lastBody;
 const ctx=vm.createContext({$:s=>nodes.get(s),state:{settings:{mode:'model'},model_status:{}},

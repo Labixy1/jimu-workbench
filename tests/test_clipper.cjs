@@ -8,12 +8,14 @@ const data={title:'虚构JD',content:'虚构岗位：分析用户反馈、核对
 assert.equal(ctx.clipperPayload(encode(data)).url,'https://example.com/jd');
 assert.equal(ctx.clipperPayload(encode(data)).content,data.content);
 assert.equal(ctx.clipperPayload('#unrelated'),null);
-for(const d of [{...data,url:'javascript:alert(1)'},{...data,url:'https://user:pass@example.com'},{...data,category:'invalid'},{...data,content:'tiny'},{...data,content:'x'.repeat(20001)}])assert.throws(()=>ctx.clipperPayload(encode(d)));
+for(const d of [{...data,url:'javascript:alert(1)'},{...data,url:'https://user:pass@example.com'},{...data,category:'invalid'},{...data,content:'tiny'},{...data,content:'x'.repeat(40001)}])assert.throws(()=>ctx.clipperPayload(encode(d)));
 assert.throws(()=>ctx.clipperPayload('#clip=bad%%'));
-let source=fs.readFileSync(path.join(root,'browser-clipper/popup.js'),'utf8');
-source=source.slice(source.indexOf('function readVisiblePage'),source.indexOf("$('#capture').onclick"));
-const extraction=vm.createContext({URL,location:{href:'https://example.com/job?token=private'},document:{title:'模拟招聘页',querySelector:()=>({innerText:'整个网页正文'}),body:{}},window:{getSelection:()=>({toString:()=>data.content})}});
+const source=fs.readFileSync(path.join(root,'browser-clipper/extract.js'),'utf8');
+const extraction=vm.createContext({URL,location:{href:'https://example.com/job?token=private',hostname:'example.com'},document:{title:'模拟招聘页',querySelector:()=>null,body:{}},window:{getSelection:()=>({toString:()=>data.content})}});
 vm.runInContext(source,extraction);assert.equal(extraction.readVisiblePage().content,data.content);assert.equal(extraction.readVisiblePage().url,'https://example.com/job');
+const wechat={...data,url:'https://mp.weixin.qq.com/s?__biz=fixture&mid=2&idx=1&sn=abc&key=secret&uin=private',category:'article',cover_url:'https://example.com/c.png'};
+assert.equal(ctx.clipperPayload(encode(wechat)).url,'https://mp.weixin.qq.com/s?__biz=fixture&mid=2&idx=1&sn=abc');
+assert.equal(ctx.clipperPayload(encode(wechat)).cover_url, 'https://example.com/c.png');
 const manifest=JSON.parse(fs.readFileSync(path.join(root,'browser-clipper/manifest.json')));
 assert.deepEqual(manifest.permissions,['activeTab','scripting']);assert(!manifest.host_permissions);
 const html=fs.readFileSync(path.join(root,'web/index.html'),'utf8');

@@ -21,6 +21,8 @@ def sync_wiki(root, store):
         if body.get('diagram'):
             lines += ['','## 顺序流程图','']
             lines += [str(i+1)+'. '+label for i,label in enumerate(body['diagram'])]
+        if body.get('graph'):
+            lines += ['','## 画板关系数据','','```json',json.dumps(body['graph'],ensure_ascii=False,indent=2),'```']
         lines += ['','## 原始依据','']
         for cite in body['citations']:
             source=store.source(cite['source_id'])

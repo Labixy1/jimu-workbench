@@ -10,25 +10,43 @@ async function api(path,data){const r=await fetch(scoped(path),{method:data===un
 function toast(t){$('#toast').textContent=t;$('#toast').classList.add('show');clearTimeout(timer);timer=setTimeout(()=>$('#toast').classList.remove('show'),4500);}
 function pages(){return state.artifacts.filter(a=>a.kind==='wiki');}function map(){return state.artifacts.find(a=>a.id==='map-agent');}function job(){return state.jobs.find(j=>j.conversation_id===cid);}
 function md(text){
- const html=esc(text).replace(/\[\[(wiki_[a-z0-9]+)\]\]/g,(_,id)=>`<button class="text-button" data-page="${id}">↗ ${esc(pages().find(p=>p.id===id)?.title||id)}</button>`).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/`([^`\n]+)`/g,'<code>$1</code>');
- const lines=html.split('\n'),out=[];
+ const inline=value=>{
+  const tokens=/`([^`\n]+)`|\[\[(wiki_[a-z0-9]+)\]\]|\[([^\]\n]+)\]\((https?:\/\/[^\s<>]+)\)|\*\*([^*\n]+)\*\*/g;
+  let html='',cursor=0,match;
+  while((match=tokens.exec(value))){
+   html+=esc(value.slice(cursor,match.index));cursor=tokens.lastIndex;
+   if(match[1]!==undefined)html+='<code>'+esc(match[1])+'</code>';
+   else if(match[2])html+=`<button class="text-button" data-page="${match[2]}">↗ ${esc(pages().find(p=>p.id===match[2])?.title||match[2])}</button>`;
+   else if(match[3]){
+    try{const url=new URL(match[4]);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)throw Error();html+=`<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">${esc(match[3])}</a>`;}
+    catch{html+=esc(match[0]);}
+   }else html+='<strong>'+esc(match[5])+'</strong>';
+  }
+  return html+esc(value.slice(cursor));
+ };
+ const lines=String(text??'').split('\n'),out=[];
  const cells=line=>line.trim().replace(/^\||\|$/g,'').split('|').map(s=>s.trim());
  for(let i=0;i<lines.length;i++){
   const l=lines[i];
+  if(/^\s*```/.test(l)){
+   const code=[];i++;
+   while(i<lines.length&&!/^\s*```/.test(lines[i]))code.push(lines[i++]);
+   out.push('<pre><code>'+esc(code.join('\n'))+'</code></pre>');continue;
+  }
   if(l.includes('|')&&lines[i+1]&&/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i+1])){
    const head=cells(l);i+=2;const rows=[];
-   while(i<lines.length&&lines[i].includes('|')){rows.push('<tr>'+cells(lines[i]).map(v=>'<td>'+v+'</td>').join('')+'</tr>');i++;}
-   i--;out.push('<div class="table-scroll"><table><thead><tr>'+head.map(v=>'<th>'+v+'</th>').join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>');continue;
+   while(i<lines.length&&lines[i].includes('|')){rows.push('<tr>'+cells(lines[i]).map(v=>'<td>'+inline(v)+'</td>').join('')+'</tr>');i++;}
+   i--;out.push('<div class="table-scroll"><table><thead><tr>'+head.map(v=>'<th>'+inline(v)+'</th>').join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table></div>');continue;
   }
-  out.push(l.startsWith('### ')?'<h4>'+l.slice(4)+'</h4>':l.startsWith('## ')?'<h3>'+l.slice(3)+'</h3>':l.startsWith('# ')?'<h3>'+l.slice(2)+'</h3>':l.startsWith('- ')?'<p>• '+l.slice(2)+'</p>':l.startsWith('&gt; ')?'<blockquote>'+l.slice(5)+'</blockquote>':l?'<p>'+l+'</p>':'');
+  out.push(/^\s*(?:---+|\*\*\*+)\s*$/.test(l)?'<hr>':l.startsWith('### ')?'<h4>'+inline(l.slice(4))+'</h4>':l.startsWith('## ')?'<h3>'+inline(l.slice(3))+'</h3>':l.startsWith('# ')?'<h3>'+inline(l.slice(2))+'</h3>':l.startsWith('- ')?'<p>• '+inline(l.slice(2))+'</p>':l.startsWith('> ')?'<blockquote>'+inline(l.slice(2))+'</blockquote>':l?'<p>'+inline(l)+'</p>':'');
  }
  return out.join('');
 }
-async function load(){state=await api('/api/state');sourceIds=new Set([...sourceIds].filter(id=>state.sources.some(s=>s.id===id)));wikiIds=new Set([...wikiIds].filter(id=>pages().some(p=>p.id===id)));boardRefs=new Map([...boardRefs].filter(([id])=>state.artifacts.some(a=>a.id===id&&a.kind==='board')));if(cid){const c=await api('/api/conversations/'+cid);messages=c.messages;}render();if(state.weekly?.runs.some(r=>['collecting','queued','running'].includes(r.status)))weeklyPoll();}
+async function load(){state=await api('/api/state');sourceIds=new Set([...sourceIds].filter(id=>state.sources.some(s=>s.id===id)));wikiIds=new Set([...wikiIds].filter(id=>pages().some(p=>p.id===id)));boardRefs=new Map([...boardRefs].filter(([id])=>state.artifacts.some(a=>a.id===id&&a.kind==='board')));if(cid){const c=await api('/api/conversations/'+cid);messages=c.messages;}render();if(state.weekly?.runs.some(r=>['collecting','queued','running'].includes(r.status)))weeklyPoll();if(typeof watchReadingUpdates==='function')watchReadingUpdates();}
 function render(){
  $('#wiki-count').textContent=pages().filter(p=>!p.body.tags.includes('周刊')).length||'';
  $('#source-count').textContent=state.library?.length||state.sources.length||'';$('#wiki-count').textContent=state.artifacts.filter(a=>['wiki','board','career','career_review'].includes(a.kind)).length||'';
- const status=state.settings.mode==='deepseek'?(state.model_status.test?.passed?'DeepSeek 已验证':state.model_status.key_configured?'DeepSeek 待验证':'DeepSeek 未配置密钥'):state.settings.mode==='fixture'?'测试模式，非真实模型':state.settings.mode==='model'?'自定义模型':'模型未连接';
+ const status=state.settings.mode==='deepseek'?(state.model_status.test?.passed?'DeepSeek 已验证':state.model_status.key_configured?'DeepSeek 已配置':'DeepSeek 未配置密钥'):state.settings.mode==='fixture'?'测试模式，非真实模型':state.settings.mode==='model'?'自定义模型':'模型未连接';
  $('#connection-label').textContent=status;
  $('#settings-button').title=status;
  $('#composer-model').textContent=state.settings.mode==='deepseek'?'DeepSeek':state.settings.mode==='fixture'?'测试模型':state.settings.mode==='model'?'自定义模型':'未连接模型';
@@ -89,7 +107,7 @@ function updateContextBudget(){
 function contextDialog(){renderReferencePicker();$('#context-dialog').showModal();}
 function settingsDialog(){$('#model-id').value=state.settings.mode==='deepseek'?state.settings.model:'deepseek-flash';$('#model-key').value='';$('#settings-error').textContent='';$('#key-status').textContent=state.model_status.key_configured?'已配置密钥。留空表示不更改。':'尚未配置密钥；填入后才能真正调用。';$('#preferences').value=state.memory?.instructions||'';$('#memory-error').textContent='';$('#memory-status').textContent=state.memory?.instructions?'已保存到本机':'尚未设置';$('#settings-dialog').showModal();selectSettingsTab('model');refreshUsage();}
 async function saveSettings(){if($('#model-key').value.trim()){await api('/api/model/key',{key:$('#model-key').value.trim()});$('#model-key').value='';}await api('/api/settings',{mode:'deepseek',model:$('#model-id').value});await load();}
-function editWiki(id=null){editorMessageId=null;editorId=id;$('#wiki-category').innerHTML=categoryOptions(state.library?.find(a=>a.id===id)?.category_id||(libraryCategory==='all'||libraryCategory==='ai-generated'?'':libraryCategory));const p=pages().find(a=>a.id===id);editorRevision=p?.revision||0;$('#editor-title').textContent=p?'编辑知识页':'新建知识页';$('#wiki-title').value=p?.title||'';$('#wiki-summary').value=p?.body.summary||'';$('#wiki-content').value=p?.body.content||'';$('#wiki-tags').value=p?.body.tags.join(', ')||'';$('#wiki-error').textContent='';$('#wiki-link-options').innerHTML='<p class="hint">关联已有知识页（可选）</p>'+pages().filter(a=>a.id!==id).map(a=>`<label class="context-option"><input type="checkbox" data-editor-link="${a.id}" ${p?.body.links.includes(a.id)?'checked':''}><span>${esc(a.title)}</span></label>`).join('');$('#wiki-editor').showModal();}
+function editWiki(id=null){editorMessageId=null;editorId=id;$('#wiki-category').innerHTML=assetSaveOptions(state.library?.find(a=>a.id===id)?.category_id||(libraryCategory==='all'||libraryCategory==='ai-generated'?'':libraryCategory),libraryOrigin);const p=pages().find(a=>a.id===id);editorRevision=p?.revision||0;$('#editor-title').textContent=p?'编辑文稿':'新建文稿';$('#wiki-title').value=p?.title||'';$('#wiki-summary').value=p?.body.summary||'';$('#wiki-content').value=p?.body.content||'';$('#wiki-tags').value=p?.body.tags.join(', ')||'';$('#wiki-error').textContent='';$('#wiki-link-options').innerHTML='<p class="hint">关联已有文稿（可选）</p>'+pages().filter(a=>a.id!==id).map(a=>`<label class="context-option"><input type="checkbox" data-editor-link="${a.id}" ${p?.body.links.includes(a.id)?'checked':''}><span>${esc(a.title)}</span></label>`).join('');$('#wiki-editor').showModal();}
 async function submit(){if(submitting)return;const prompt=$('#prompt').value.trim();if(!prompt)return toast('先描述要解决的问题');if(state.settings.mode==='unconfigured'||state.settings.mode==='deepseek'&&!state.model_status.key_configured){settingsDialog();return;}retrievalItems=[];if(['wiki','draft'].includes(kind)&&!sourceIds.size&&!retrievalItems.some(i=>i.kind==='source')){contextDialog();return toast('请先选择至少一份原始资料');}if(kind==='experience'&&!careerNarrative){experienceDialog();return;}if(kind==='tailor'&&(!careerSelection||!jdSelection.length)){tailorDialog();return;}
  submitting=true;$('#send-button').disabled=true;try{const j=await api('/api/jobs',{conversation_id:cid,artifact_id:'map-agent',source_ids:[...sourceIds],wiki_ids:[...wikiIds],wiki_target_id:kind==='wiki'?targetId:null,prompt,kind,send_to_model:true,board_refs:[...boardRefs].map(([id,revision])=>({id,revision})),retrieval:[],skill_refs:[...skillRefs].map(([id,revision])=>({id,revision})),website_refs:[...websiteRefs.keys()],document_refs:[...documentRefs].map(([id,revision])=>({id,revision})),document_target:kind==='document'&&activeDocument?{id:activeDocument.id,revision:activeDocument.revision}:null,narrative:careerNarrative,output_format:careerFormat,career_id:careerSelection?.id,career_revision:careerSelection?.revision,jd_source_ids:jdSelection,declared_gaps:declaredGaps});cid=j.conversation_id;$('#prompt').value='';await load();poll();}finally{submitting=false;renderProgress();}}
 function poll(){if(polling)return;polling=true;const tick=async()=>{try{await load();if(state.jobs.some(j=>j.status==='running'))await checkMcpPermissions();if(state.jobs.some(j=>['running','queued'].includes(j.status))){setTimeout(tick,1400);return;}polling=false;}catch(e){toast(e.message);polling=false;}};setTimeout(tick,900);}
@@ -131,7 +149,7 @@ async function fetchWeb(url,button){
 
 $('#web-open').onclick=openWeb;
 $('#wiki-search').oninput=renderWiki;
-$('#source-fetch').onclick=async()=>{try{const url=$('#source-url').value.trim();if(!url)return toast('请先填写来源链接');await fetchWeb(url,$('#source-fetch'));}catch(e){$('#source-error').textContent=e.message;}};
+$('#source-fetch').onclick=async()=>{const b=$('#source-fetch');try{const url=$('#source-url').value.trim();if(!url)return toast('请先填写来源链接');b.disabled=true;const result=await api('/api/capture/preview',{url,allow_remote:true});$('#source-dialog').close();await openCaptureDialog();capturePreview=result;showCapturePreview(result);$('#capture-save').disabled=false;$('#capture-error').textContent='已读取，检查后保存。';}catch(e){$('#source-error').textContent=e.message;}finally{b.disabled=false;}};
 $('#web-form').onsubmit=async e=>{e.preventDefault();const query=$('#web-query').value.trim();if(!query)return;
  if(!await confirm('搜索公开网页',`向 DeepSeek 发送搜索词「${query}」。可能产生 API 费用；不发送本地知识库。请勿包含敏感信息。`))return;
  const b=$('#web-submit');b.disabled=true;$('#web-error').textContent='';
@@ -146,7 +164,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(d.clipperHelp!==undefined)$('#clipper-help').showModal();
  if(d.flowBoard){if(!await confirm('保存为可编辑画板？','将本页已保存的流程生成独立画板，不改变知识页正文。'))return;const p=pages().find(v=>v.id===d.flowBoard),board=await api('/api/boards/from-wiki',{id:p.id,revision:p.revision});await load();await openBoard(board.id);}
  if(d.fetchResult!==undefined)await fetchWeb(webResults[Number(d.fetchResult)].url,b);
- if(d.saveMessage!==undefined){const m=messages[Number(d.saveMessage)];editWiki();editorMessageId=m.id;$('#wiki-title').value=(state.conversations.find(c=>c.id===cid)?.title||'对话笔记').slice(0,100);$('#wiki-summary').value='来自对话的个人笔记，尚未经原文核验。';$('#wiki-content').value=m.text;$('#wiki-tags').value='对话笔记';}
+ if(d.saveMessage!==undefined){const m=messages[Number(d.saveMessage)];editWiki();editorMessageId=m.id;$('#editor-title').textContent='存为文稿';$('#wiki-category').innerHTML=assetSaveOptions('','creations');$('#wiki-title').value=(state.conversations.find(c=>c.id===cid)?.title||'对话笔记').slice(0,100);$('#wiki-summary').value='来自对话的个人笔记，尚未经原文核验。';$('#wiki-content').value=m.text;$('#wiki-tags').value='对话笔记';}
  if(d.diagram)openDiagram(d.diagram);
  if(d.weeklySettings!==undefined)weeklyDialog(d.weeklySettings||undefined);
  if(d.weeklyNew!==undefined)weeklyDialog(null,true);
@@ -156,7 +174,7 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button');i
  if(d.tailorCareer)tailorDialog(d.tailorCareer);
  if(d.editCareer){const a=state.artifacts.find(a=>a.id===d.editCareer);careerEditId=a.id;careerEditRevision=a.revision;$('#career-edit-content').value=a.body[a.kind==='career'?'general':'tailored'];$('#career-edit-confirmed').checked=false;$('#career-edit-error').textContent='';$('#career-edit-dialog').showModal();}
  if(d.asset)await openDocument(d.asset);
- if(d.newBoard!==undefined)await openBoard();
+ if(d.newBoard!==undefined){closeAssetMenus();await openBoard();}
  if(d.openBoard)await openBoard(d.openBoard);
  if(d.linkBoard)await openBoard(null,d.linkBoard);
  if(d.backAssets!==undefined){pageId=null;renderOutputLibrary();}
@@ -276,12 +294,12 @@ async function openBoard(id=null,linked=null){
  if(typeof boardDraftJob!=='undefined')boardDraftJob=null;
  if(!id&&linked){const existing=state.artifacts.find(a=>a.kind==='board'&&a.body.linked_id===linked);if(existing)id=existing.id;}
  const p=state.artifacts.find(a=>a.id===id);boardId=id;boardRevision=p?.revision||0;boardLinked=p?.body.linked_id||linked;boardDirty=false;
- $('#board-destination').innerHTML=categoryOptions(p?state.library?.find(a=>a.id===p.id)?.category_id||'':'','creations');$('#board-title').value=p?.title||(linked?(state.artifacts.find(a=>a.id===linked)?.title||'')+' · 画板':'未命名画板');$('#board-status').textContent=p?'v'+p.revision+' · 已保存':'尚未保存';$('#board-error').textContent='';$('#board-dialog').showModal();
+ $('#board-destination').innerHTML=categoryOptions(p?state.library?.find(a=>a.id===p.id)?.category_id||'':'','creations');$('#board-title').value=p?.title||(linked?(state.artifacts.find(a=>a.id===linked)?.title||'')+' · 画板':'未命名画板');$('#board-status').textContent=p?'已保存':'尚未保存';$('#board-error').textContent='';$('#board-save').textContent='保存';$('#board-seed').hidden=!!p?.body.scene.elements?.length;$('#board-dialog').showModal();
  try{if(!boardModule){const link=document.createElement('link');link.rel='stylesheet';link.href='/board-assets/main.css';document.head.append(link);boardModule=await import('/board-assets/main.js');}boardModule.mountBoard($('#board-container'),p?.body.scene||{});boardSeedNodes=state.artifacts.find(a=>a.id===boardLinked)?.body.diagram||[];}catch(e){$('#board-error').textContent='画板加载失败：'+e.message;}
 }
 window.addEventListener('board-edited',()=>{boardDirty=true;$('#board-status').textContent='有未保存修改';});
 $('#board-title').oninput=()=>{boardDirty=true;$('#board-status').textContent='有未保存修改';};
-$('#board-save').onclick=async()=>{const button=$('#board-save');button.disabled=true;try{const p=await api('/api/boards',{id:boardId,revision:boardRevision,title:$('#board-title').value,scene:boardModule.boardScene(),category_id:$('#board-destination').value,linked_id:boardLinked});boardId=p.id;boardRevision=p.revision;boardDirty=false;$('#board-status').textContent='v'+p.revision+' · 已保存';await load();toast('画板已保存，可在资产中找到');}catch(e){$('#board-error').textContent=e.message;}finally{button.disabled=false;}};
+$('#board-save').onclick=async()=>{const button=$('#board-save');button.disabled=true;try{const p=await api('/api/boards',{id:boardId,revision:boardRevision,title:$('#board-title').value,scene:boardModule.boardScene(),category_id:$('#board-destination').value,linked_id:boardLinked});boardId=p.id;boardRevision=p.revision;boardDirty=false;$('#board-status').textContent='已保存';await load();toast('画板已保存，可在资产中找到');}catch(e){$('#board-error').textContent=e.message;}finally{button.disabled=false;}};
 async function closeBoard(){if(boardDirty&&!await confirm('退出未保存的画板？','退出会丢弃本次未保存修改。可以取消，先保存画板。'))return;$('#board-dialog').close();}
 $('#board-close').onclick=closeBoard;$('#board-dialog').oncancel=e=>{e.preventDefault();closeBoard();};
 $('#board-export').onclick=async()=>{try{const svg=await boardModule.boardSvg();const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));const a=document.createElement('a');a.href=url;a.download='jimu-board.svg';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){$('#board-error').textContent=e.message;}};

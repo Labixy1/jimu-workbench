@@ -23,6 +23,8 @@ assert(node('#messages').innerHTML.includes('存为文稿'));
 j.status='review';j.payload.user_draft={title:'Local fixture draft',content:'not a model result'};
 ctx.renderMessages();assert(node('#messages').innerHTML.includes('data-open-job-file'));
 ctx.renderReview();assert(node('#review-panel').hidden,'file card is attached to its turn, not duplicated below');
+j.status='approved';j.payload.published_id='saved-fixture';ctx.state.artifacts=[{id:'saved-fixture',title:'Current saved title'}];
+assert(ctx.turnFileMarkup(j).includes('Current saved title'),'saved file cards follow the current asset title');
 j.status='failed';j.payload.error='<script>API rejected the request</script>';
 ctx.renderMessages();
 assert(node('#messages').innerHTML.includes('role="alert"'));

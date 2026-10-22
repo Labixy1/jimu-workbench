@@ -16,16 +16,41 @@ def recent_history(messages):
                      'policy': 'recent_8_messages_1200_chars_each'}
 
 
-def check_context(prompt, sources, pages, preferences, history, target=None, career=None, boards=None, method=None, skills=None, documents=None):
+def check_context(prompt, sources, pages, preferences, history, target=None, career=None, boards=None, method=None, skills=None, documents=None, skill_catalog=None):
     body = {'prompt': prompt, 'sources': sources, 'wiki_pages': pages,
             'preferences': preferences, 'recent_history': history,
-            'wiki_target': target, 'career_snapshot': career, 'boards': boards or [], 'task_method': method, 'skills': skills or [], 'documents': documents or []}
+            'wiki_target': target, 'career_snapshot': career, 'boards': boards or [], 'task_method': method, 'skills': skills or [], 'documents': documents or [], 'available_skills':skill_catalog or []}
     size = len(json.dumps(body, ensure_ascii=False))
     if size > MAX_CONTEXT_CHARS:
         raise ValueError('本次上下文超过36000字符，请减少整份材料，或自行选取相关片段；不会静默截断所选材料')
     return {'characters': size, 'limit_characters': MAX_CONTEXT_CHARS,
             'source_count': len(sources), 'knowledge_count': len(pages), 'board_count': len(boards or []),
             'policy': 'selected_materials_and_bounded_history'}
+
+
+def research_quote_anchors(sources, research):
+    """Reuse verified findings, not a second copy of every source line."""
+    allowed = {source['id']: source['content'] for source in sources}
+    result, seen = [], set()
+    findings = research.get('findings', []) if isinstance(research, dict) else []
+    if not isinstance(findings, list):
+        return result
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        sid, quote = finding.get('source_id'), finding.get('quote')
+        if not isinstance(sid, str) or not isinstance(quote, str):
+            continue
+        quote = quote.strip()
+        if sid not in allowed or not 8 <= len(quote) <= 1200 or quote not in allowed[sid]:
+            continue
+        if (sid, quote) in seen:
+            continue
+        seen.add((sid, quote))
+        result.append({'source_id': sid, 'quote_id': 'evidence_' + str(len(result) + 1), 'quote': quote})
+        if len(result) == 8:
+            break
+    return result
 
 
 def stage_context(packet, stage):
@@ -37,7 +62,7 @@ def stage_context(packet, stage):
         'research': ('jd_source_ids', 'career_snapshot'),
         'draft': ('preferences', 'recent_history', 'wiki_pages', 'wiki_target',
                   'career_snapshot', 'declared_gaps', 'jd_source_ids', 'research',
-                  'general_quote_anchors', 'source_quote_anchors', 'invalid_proposal', 'artifact', 'boards', 'documents', 'document_target'),
+                  'general_quote_anchors', 'source_quote_anchors', 'invalid_proposal', 'review_feedback', 'proposal', 'artifact', 'boards', 'documents', 'document_target'),
         'review': ('proposal', 'career_snapshot', 'declared_gaps', 'jd_source_ids'),
     }
     for key in keys[stage]:

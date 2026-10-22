@@ -4,15 +4,16 @@ const html=fs.readFileSync('web/index.html','utf8'),app=fs.readFileSync('web/app
 const sidebar=html.slice(html.indexOf('<aside class="sidebar"'),html.indexOf('<main>'));
 assert(!sidebar.includes('data-view="home"'));
 assert(sidebar.includes('id="new-chat"'));
-assert(sidebar.includes('技能·连接器·工具'));
+assert(sidebar.includes('扩展'));
 for(const tab of ['skills','connectors','tools'])assert(html.includes('data-resource-tab="'+tab+'"'));
-for(const mode of ['file','text','url'])assert(html.includes('data-import-mode="'+mode+'"'));
-assert(html.includes('data-open-github'));assert(html.includes('data-clipper-help'));
-assert(source.includes('Browser Use'));assert(source.includes('未接入'));assert(source.includes('只读导入'));
+for(const mode of ['file','text','url'])assert(html.includes('data-source-mode="'+mode+'"'));
+assert(html.includes('data-open-github'));assert(source.includes('data-clipper-help'));
+assert(source.includes('Browser Use'));assert(source.includes('未连接'));assert(source.includes('官方 MCP'));
+assert(source.includes('data-mcp-connect="github"'));assert(source.includes('data-mcp-connect="browser_use"'));
 assert(source.includes('allow_remote:true'));assert(source.includes("sourceDialog('text')"));
 assert(app.includes('链接不会未经预览自动保存'));
 const nodes=new Map(),handler={};
-function node(key){if(!nodes.has(key))nodes.set(key,{value:'',hidden:false,textContent:'',innerHTML:'',classList:{toggle(){}},showModal(){this.open=true},close(){this.open=false}});return nodes.get(key);}
+function node(key){if(!nodes.has(key))nodes.set(key,{value:'',hidden:false,textContent:'',innerHTML:'',classList:{toggle(){}},querySelectorAll(){return[]},showModal(){this.open=true},close(){this.open=false}});return nodes.get(key);}
 const ctx=vm.createContext({$:node,document:{querySelectorAll(){return[]},addEventListener(){}},URL,view:'skills',pendingFile:{name:'old'},esc:s=>String(s),api:async()=>{},toast(){},sourceDialog(){},confirm:async()=>false});
 vm.runInContext(source,ctx);
 ctx.setSourceMode('url');assert.equal(node('#source-upload').hidden,true);assert.equal(node('#source-content-field').hidden,false);assert.equal(node('#source-fetch').hidden,false);assert.equal(ctx.pendingFile,null);
@@ -20,7 +21,12 @@ ctx.setSourceMode('file');assert.equal(node('#source-upload').hidden,false);asse
 for(const url of ['javascript:alert(1)','https://user:pass@example.com','file:///private'])assert.equal(ctx.safeWebsite(url),'about:blank');
 assert.equal(ctx.safeWebsite('https://example.com'), 'https://example.com/');
 vm.runInContext("resourceTab='connectors';connectionData={github:{cli_installed:false}}",ctx);ctx.renderResources();
-assert(node('#resource-connectors').innerHTML.includes('浏览器采集'));assert(node('#resource-connectors').innerHTML.includes('未接入'));
+assert(node('#resource-connectors').innerHTML.includes('浏览器采集'));assert(node('#resource-connectors').innerHTML.includes('未连接'));
+vm.runInContext("mcpState={github:{status:'connected'},browser_use:{status:'needs_auth'}}",ctx);ctx.renderResources();
+assert.equal(ctx.mcpLabel('github'),'已连接');assert.equal(ctx.mcpLabel('browser_use'),'需要授权');
 vm.runInContext("resourceTab='tools';connectionData={links:[{id:'fixture',name:'test',group:'设计',url:'https://example.com',description:'sample'}]}",ctx);ctx.renderResources();
-assert(node('#resource-tools').innerHTML.includes('网址快捷入口'));assert(node('#resource-tools').innerHTML.includes('noopener noreferrer'));
+assert(node('#resource-tools').innerHTML.includes('打开官网'));assert(node('#resource-tools').innerHTML.includes('noopener noreferrer'));
+assert(node('#resource-tools').innerHTML.includes('/api/site-icon?id=fixture'));
+assert(node('#resource-tools').innerHTML.includes('data-reference-website="fixture"'));
+assert(node('#resource-tools').innerHTML.includes('data-delete-tool="fixture"'));
 console.log('PASS single chat entry, resources tabs, import modes, honest connector states and safe website links');

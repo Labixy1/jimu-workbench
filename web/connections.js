@@ -18,16 +18,16 @@ async function loadConnections(){
 }
 function renderResources(){
  if(view!=='skills')return;
- const text={skills:['技能','把常用方法写成规则，在对话中重复使用。'],connectors:['连接器','从外部获取材料，先预览，再保存到资产。'],tools:['常用网站','']}[resourceTab];
+ const text={skills:['技能','Agent 按需加载的 Skill，也可以在对话中主动引用。'],connectors:['连接器','从外部获取材料，先预览，再保存到资产。'],tools:['常用网站','']}[resourceTab];
  $('#resource-heading').textContent=text[0];$('#resource-description').textContent=text[1];
- $('#skill-new').hidden=resourceTab!=='skills';$('#tool-new').hidden=resourceTab!=='tools';
+ $('#skill-actions').hidden=resourceTab!=='skills';$('#tool-new').hidden=resourceTab!=='tools';
  for(const tab of ['skills','connectors','tools'])$('#resource-'+tab).hidden=tab!==resourceTab;
  document.querySelectorAll('[data-resource-tab]').forEach(b=>b.classList.toggle('active',b.dataset.resourceTab===resourceTab));
  if(resourceTab==='connectors'){
   $('#resource-connectors').innerHTML=`<div class="extension-grid">
-   <article class="extension-card"><div class="extension-card-head"><span class="extension-avatar">G</span><button class="extension-title" data-connector-info="github">GitHub</button><button class="extension-add" data-mcp-connect="github" aria-label="连接GitHub MCP" title="连接GitHub MCP">${mcpState.github?.status==='connected'?'✓':'+'}</button></div><p>官方 MCP：仓库、代码、Issue、PR。${mcpLabel('github')}</p></article>
-   <article class="extension-card"><div class="extension-card-head"><span class="extension-avatar">B</span><button class="extension-title" data-browser-use>Browser Use</button><button class="extension-add" data-mcp-connect="browser_use" aria-label="连接Browser Use MCP" title="连接Browser Use MCP">${mcpState.browser_use?.status==='connected'?'✓':'+'}</button></div><p>本地官方 MCP：读取页面、点击、填表。${mcpLabel('browser_use')}</p></article>
-   <article class="extension-card"><div class="extension-card-head"><span class="extension-avatar">↗</span><button class="extension-title" data-clipper-help>浏览器采集</button><button class="extension-add" data-clipper-help aria-label="安装浏览器采集" title="安装与使用">+</button></div><p>手动采集当前页面或选中文字，预览后存入资料库。</p></article>
+   <article class="extension-card"><div class="extension-card-head"><span class="extension-avatar">G</span><button class="extension-title" data-connector-info="github">GitHub</button><button class="extension-add" data-mcp-connect="github" aria-label="连接GitHub MCP" title="连接GitHub MCP">${mcpState.github?.status==='connected'?'✓':'+'}</button></div><p>官方 MCP · 仓库、代码、Issue、PR。${esc(mcpLabel('github'))}</p><div class="connector-actions"><button data-open-github>导入 README</button><button data-mcp-github-test>测试读取</button></div></article>
+   <article class="extension-card"><div class="extension-card-head"><span class="extension-avatar">B</span><button class="extension-title" data-browser-use>Browser Use</button><button class="extension-add" data-mcp-connect="browser_use" aria-label="连接Browser Use MCP" title="连接Browser Use MCP">${mcpState.browser_use?.status==='connected'?'✓':'+'}</button></div><p>本地 MCP · 打开网页、登录后读取。${esc(mcpLabel('browser_use'))}</p><div class="connector-actions"><button data-capture-open>采集网页</button></div></article>
+   <article class="extension-card"><div class="extension-card-head"><span class="extension-avatar">↗</span><button class="extension-title" data-clipper-help>浏览器采集</button><button class="extension-add" data-clipper-help aria-label="安装浏览器采集" title="安装与使用">+</button></div><p>用自己的浏览器采集文章、封面和日期，选择目录后保存。</p><div class="connector-actions"><button data-clipper-help>安装与使用</button></div></article>
   </div>${connectionsError?'<p class="error">'+esc(connectionsError)+'</p>':''}`;
  }
  if(resourceTab==='tools'){
@@ -68,7 +68,7 @@ $('#github-form').onsubmit=async e=>{
 document.addEventListener('click',async e=>{
  const b=e.target.closest('button');if(!b)return;const d=b.dataset;
  try{
-  if(d.mcpConnect){b.disabled=true;try{mcpState=await api('/api/mcp/connect',{name:d.mcpConnect});renderResources();if(mcpState.github?.status!=='connected'&&d.mcpConnect==='github')$('#github-mcp-auth').showModal();}finally{b.disabled=false;}}
+  if(d.mcpConnect){if(d.mcpConnect==='github'){$('#github-mcp-auth').showModal();}else{b.disabled=true;try{mcpState=await api('/api/mcp/connect',{name:d.mcpConnect});renderResources();}finally{b.disabled=false;}}}
   if(d.mcpRefresh!==undefined){mcpState=await api('/api/mcp');renderResources();}
   if(d.resourceTab){resourceTab=d.resourceTab;await switchView('skills');renderResources();if(!connectionData&&resourceTab!=='skills')await loadConnections();}
   if(d.importMode){b.closest('details')?.removeAttribute('open');sourceDialog(d.importMode);}
@@ -77,6 +77,8 @@ document.addEventListener('click',async e=>{
   if(d.openGithub!==undefined)githubDialog();
   if(d.connectorInfo==='github')$('#github-connector-info').showModal();
   if(d.browserUse!==undefined)$('#browser-use-dialog').showModal();
+  if(d.browserCapture!==undefined){$('#browser-use-dialog').close();openCaptureDialog();}
+  if(d.mcpGithubTest!==undefined){b.disabled=true;try{const r=await api('/api/mcp/github-test',{allow_remote:true});toast('GitHub MCP 真实读取成功：'+r.repository+' · '+r.tool);}finally{b.disabled=false;}}
   if(d.browserManual!==undefined){$('#browser-use-dialog').close();$('#clipper-help').showModal();}
   if(d.editTool)editTool(d.editTool);
   if(d.deleteTool){const link=connectionData.links.find(l=>l.id===d.deleteTool);if(await confirm('移除「'+link.name+'」？','只移除这个网址入口，不删除已采集的资产。')){await api('/api/tool-links/remove',{id:link.id,revision:link.revision});websiteRefs.delete(link.id);await loadConnections();render();}}
@@ -85,6 +87,7 @@ document.addEventListener('click',async e=>{
 });
 
 $('#github-mcp-authorize').onclick=async()=>{try{const r=await api('/api/mcp/auth',{name:'github'});const a=$('#github-mcp-auth-link');a.href=r.authorizationUrl;a.hidden=false;a.textContent='打开 GitHub 授权页';}catch(e){$('#github-mcp-auth-error').textContent=e.message;}};
+$('#github-use-local-login').onclick=async()=>{const b=$('#github-use-local-login');b.disabled=true;$('#github-mcp-auth-error').textContent='正在连接…';try{mcpState=await api('/api/mcp/github-login',{});if(mcpState.github?.status==='connected'){$('#github-mcp-auth').close();toast('GitHub 已连接 · 只读');}else $('#github-mcp-auth-error').textContent=mcpState.github?.error||'连接未完成';renderResources();}catch(error){$('#github-mcp-auth-error').textContent=error.message;}finally{b.disabled=false;}};
 async function checkMcpPermissions(){try{const list=await api('/api/mcp/permissions');const panel=$('#mcp-permissions');panel.innerHTML=list.map(p=>`<article class="mcp-permission"><b>外部工具请求：${esc(p.permission)}</b><p>${esc((p.patterns||[]).join(', '))}</p><button data-mcp-reply="once" data-permission-id="${esc(p.id)}">允许本次</button><button data-mcp-reply="reject" data-permission-id="${esc(p.id)}">拒绝</button></article>`).join('');}catch{}}
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-mcp-reply]');if(!b)return;try{await api('/api/mcp/reply',{id:b.dataset.permissionId,reply:b.dataset.mcpReply});await checkMcpPermissions();}catch(err){toast(err.message);}});
 

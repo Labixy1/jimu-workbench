@@ -24,6 +24,14 @@ for(const text of ['--ink','--text-secondary','--muted'])for(const bg of ['--pap
 }
 assert(contrast(tokens.get('--on-strong'),tokens.get('--strong'))>=7);
 for(const color of ['--success','--warning','--danger'])assert(contrast(tokens.get(color),tokens.get('--paper'))>=4.5);
+const appearance=fs.readFileSync(path.join(root,'web/appearance.css'),'utf8');
+for(const [,name,body] of appearance.matchAll(/:root\[data-theme="([^"]+)"\]\s*\{([^}]+)\}/g)){
+ const palette=new Map([...body.matchAll(/(--[\w-]+):\s*(#[\da-f]{6})/g)].map(m=>[m[1],m[2]]));
+ for(const text of ['--ink','--text-secondary','--muted'])for(const bg of ['--paper','--soft','--selected']){
+  assert(contrast(palette.get(text),palette.get(bg))>=4.5,name+' '+text+' must remain readable on '+bg);
+ }
+ assert(contrast(palette.get('--on-strong'),palette.get('--strong'))>=4.5,name+' button contrast');
+}
 assert(base.includes('--sans: -apple-system, BlinkMacSystemFont'));
 const desktop=fs.readFileSync(path.join(root,'web/desktop.css'),'utf8');
 assert(desktop.includes('--shell-width: 208px'));

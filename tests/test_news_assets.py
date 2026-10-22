@@ -59,6 +59,10 @@ class NewsAssetTests(unittest.TestCase):
         with self.assertRaises(ValueError):parse_feed(b'<!DOCTYPE rss><rss/>','https://example.com/rss')
         with self.assertRaises(ValueError):parse_feed(b'x'*1500001,'https://example.com/rss')
 
+    def test_empty_release_labels_do_not_fill_asset_library(self):
+        rss=b'''<rss><channel><item><title>0.1.0-alpha.1</title><link>https://example.com/empty</link><description>Release 0.1.0-alpha.1</description></item><item><title>Fixture changelog</title><link>https://example.com/useful</link><description>Fixes the fixture rendering bug.</description></item></channel></rss>'''
+        self.assertEqual([item['title'] for item in parse_feed(rss,'https://example.com/rss')],['Fixture changelog'])
+
     def test_collect_real_shape_dedupes_and_does_not_generate(self):
         sub=self.app.weekly.save({'title':'测试订阅','urls':['https://example.com/rss'],'new':True})
         fixture={'title':'Local fixture update','url':'https://example.com/article','published_at':'2026-10-19T00:00:00+00:00','excerpt':'Explicitly labelled fixture source text, not a real public update.','feed_url':'https://example.com/rss'}

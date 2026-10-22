@@ -4,19 +4,27 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
 const root=path.resolve(__dirname,'..');
-const nodes=new Map([['#work-content',{innerHTML:''}],['#settings-usage',{innerHTML:''}],['#schedule-indicator',{textContent:''}],['#weekly-frequency',{}]]);
+const nodes=new Map();
+function node(selector){if(!nodes.has(selector))nodes.set(selector,{innerHTML:'',textContent:'',hidden:false});return nodes.get(selector);}
 const ctx=vm.createContext({
  document:{addEventListener(){},querySelectorAll(){return []}},
- $:s=>nodes.get(s),esc:s=>String(s??'').replaceAll('<','&lt;'),
+ $:node,esc:s=>String(s??'').replaceAll('<','&lt;'),URL,URLSearchParams,location:{search:''},
+ api:async()=>[],catalogItems:()=>[],
  view:'work',pages:()=>[],state:{conversations:[],weekly:{config:{title:'test',urls:[],query:'',enabled:false,weekday:4,time:'19:00'},runs:[]}},
 });
 vm.runInContext(fs.readFileSync(path.join(root,'web/desk.js'),'utf8'),ctx);
+vm.runInContext('readingCollectionLoaded=true',ctx);
+ctx.state.sources=[];ctx.state.reading={favorites:[],groups:[],issues:[],focus:[]};ctx.state.categories=[];
 ctx.renderDesk();
-assert(nodes.get('#work-content').innerHTML.includes('创建第一个订阅'));
-vm.runInContext("workTab='tasks'",ctx);ctx.renderDesk();
-assert(nodes.get('#work-content').innerHTML.includes('data-weekly-new'));
+assert(nodes.get('#work-content').innerHTML.includes('weekly-surface'));
+assert(nodes.get('#work-content').innerHTML.includes('暂无文章'));
+assert(nodes.get('#work-content').innerHTML.includes('我的收藏'));
+assert(nodes.get('#work-content').innerHTML.includes('重点关注'));
+assert(nodes.get('#work-content').innerHTML.includes('data-reading-manage'));
+assert(!nodes.get('#work-content').innerHTML.includes('data-weekly-new'));
 ctx.state.weekly.subscriptions=[{id:'sub_fixture',title:'测试订阅',urls:[],enabled:false,frequency:'weekly',weekday:4,time:'19:00',revision:1}];ctx.renderDesk();
-assert(nodes.get('#work-content').innerHTML.includes('data-news-refresh="sub_fixture" disabled'));
+assert(nodes.get('#work-content').innerHTML.includes('data-update-current'));
+assert(!nodes.get('#work-content').innerHTML.includes('reading-subscription-card'));
 vm.runInContext("usageSnapshot={calls:1,failed:0,input_tokens:null,output_tokens:null,days:[],recent:[],missing_usage_calls:1}",ctx);ctx.renderUsage();
 assert(nodes.get('#settings-usage').innerHTML.includes('输入 Token</span><strong>—'));
 assert(nodes.get('#settings-usage').innerHTML.includes('尚未查询'));
@@ -71,4 +79,9 @@ assert(html.includes('aria-controls="knowledge-inspector" aria-expanded="true"')
 assert(html.includes('回答偏好'));
 assert(html.includes('id="settings-usage"'));
 assert(!html.includes('data-work-tab="usage"'));
-console.log('PASS stable desktop shell, internal directory, draft preservation, reading subscription and truthful usage');
+assert(desktop.includes('--reading-room-height: max(810px, calc(100dvh - 180px));'));
+assert(desktop.includes('height: var(--reading-room-height);'));
+assert(desktop.includes('grid-template-rows: minmax(490px, 1.6fr) minmax(300px, 1fr);'));
+assert(desktop.includes('.reading-sketch .reading-focus-panel { height: 100%; min-height: 0; max-height: 100%;'));
+assert(desktop.includes('.reading-sketch .weekly-surface .weekly-card-grid'));
+console.log('PASS stable desktop shell, internal directory, draft preservation, fixed reading panels and truthful usage');

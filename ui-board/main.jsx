@@ -3,12 +3,16 @@ import {createRoot} from 'react-dom/client';
 import {Excalidraw,exportToSvg,convertToExcalidrawElements} from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 window.EXCALIDRAW_ASSET_PATH='/board-assets/';
-let canvas,root,signature='';
+let canvas,root,signature='',fitPending=false;
 const digest=(elements,appState)=>JSON.stringify([elements.map(e=>[e.id,e.version,e.isDeleted]),appState.viewBackgroundColor]);
+export function fitBoard(){
+ if(!canvas||!canvas.getSceneElements().length)return;
+ canvas.scrollToContent(canvas.getSceneElements(),{fitToViewport:true,viewportZoomFactor:0.98,canvasOffsets:{top:88,bottom:8,left:16,right:16},animate:false});
+}
 export function mountBoard(container,scene={}){
  if(root)root.unmount();
- canvas=null;signature='';root=createRoot(container);
- root.render(<Excalidraw initialData={{elements:scene.elements||[],appState:{...scene.appState,theme:'light'},scrollToContent:true}} langCode="zh-CN" excalidrawAPI={api=>{canvas=api;signature='';requestAnimationFrame(()=>requestAnimationFrame(()=>{if(canvas===api&&api.getSceneElements().length)api.scrollToContent(undefined,{fitToViewport:true,viewportZoomFactor:0.7});}));}} onChange={(elements,appState)=>{if(canvas){const next=digest(elements,appState);if(signature&&signature!==next)window.dispatchEvent(new Event('board-edited'));signature=next;}}} UIOptions={{tools:{image:false},canvasActions:{loadScene:false,saveToActiveFile:false,saveAsImage:false,export:false,toggleTheme:false}}} renderTopRightUI={()=>null} />);
+ canvas=null;signature='';fitPending=true;root=createRoot(container);
+ root.render(<Excalidraw initialData={{elements:scene.elements||[],appState:{...scene.appState,theme:'light'}}} langCode="zh-CN" excalidrawAPI={api=>{canvas=api;signature='';}} onChange={(elements,appState)=>{if(canvas){const next=digest(elements,appState);if(signature&&signature!==next)window.dispatchEvent(new Event('board-edited'));signature=next;if(fitPending&&elements.length&&appState.width&&appState.height){fitPending=false;requestAnimationFrame(fitBoard);}}}} UIOptions={{tools:{image:false},canvasActions:{loadScene:false,saveToActiveFile:false,saveAsImage:false,export:false,toggleTheme:false}}} renderTopRightUI={()=>null} />);
 }
 export function boardScene(){if(!canvas)throw Error('画板还在加载');return {elements:canvas.getSceneElements(),appState:{viewBackgroundColor:canvas.getAppState().viewBackgroundColor},files:{}};}
 export async function boardSvg(){const s=boardScene();return (await exportToSvg({...s,appState:{...canvas.getAppState(),exportWithDarkMode:false},exportPadding:20})).outerHTML;}

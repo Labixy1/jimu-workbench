@@ -13,7 +13,6 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
-from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -30,9 +29,13 @@ import career
 import asset_files
 import library
 import task_skills
+import skill_packages
 import connections
 from news import News
+from reading_updates import ReadingUpdates
 from sites import SITES
+from article_reader import fetch_article
+from web_capture import WebCapture
 
 MAX_BODY=90000000
 
@@ -58,21 +61,8 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def fetch_source(url):
-    validate_url(url)
-    opener=urllib.request.build_opener(SafeRedirect())
-    with opener.open(urllib.request.Request(url,headers={'User-Agent':'PersonalKnowledgeWorkbench/0.1'}),timeout=20) as r:
-        if not any(k in r.headers.get('Content-Type','') for k in ('text/','application/json')):raise ValueError('当前只支持公开文本网页；视频请导入字幕')
-        raw=r.read(400001)
-        if len(raw)>400000:raise ValueError('网页超过400KB，请粘贴需要的正文')
-        text=raw.decode(r.headers.get_content_charset() or 'utf-8',errors='replace')
-    title=re.search(r'<title[^>]*>(.*?)</title>',text,re.I|re.S)
-    title=unescape(re.sub('<[^>]+>','',title.group(1))).strip() if title else urllib.parse.urlsplit(url).hostname
-    text=re.sub(r'<(script|style|nav|footer)\b[^>]*>.*?</\1>','',text,flags=re.I|re.S)
-    text=re.sub(r'</(?:p|div|h[1-6]|li|section)>','\n',text,flags=re.I)
-    text=unescape(re.sub('<[^>]+>','',text));text=re.sub(r'\n\s*\n','\n\n',text).strip()
-    if len(text)<50:raise ValueError('未读取到足够正文，请手动粘贴；不会根据标题编造内容')
-    if len(text)>120000:raise ValueError('网页正文超过120000字，请手动选取范围；不会静默截断')
-    return title,text
+    article=fetch_article(url,validate_url)
+    return article.get('title') or urllib.parse.urlsplit(url).hostname,article['content']
 
 
 def fixture_response(request):
@@ -121,10 +111,13 @@ class App:
         sync_wiki(root,self.store)
         self.weekly=Weekly(self,validate_url)
         self.news=News(self,validate_url)
+        self.reading_updates=ReadingUpdates(self)
+        self.capture=WebCapture(self,validate_url)
 
     def state(self):
         visible={c['id'] for c in self.store.conversations() if not c['archived']}
-        return {'reading':reading_room.state(self.store),'categories':library.categories(self.store),'library':library.catalog(self.store),'skills':task_skills.all_skills(self.store),'sources':[s for s in self.store.sources() if not s['archived']],'asset_meta':asset_files.metadata(self.store),'demo':self.root!=self.credential_root,'artifacts':[a for a in self.store.artifacts() if not a['archived']],'conversations':[c for c in self.store.conversations() if c['id'] in visible],'jobs':[j for j in self.store.jobs() if j['conversation_id'] in visible],'settings':self.settings,'model_status':{'key_configured':bool(model_key(self.credential_root)),'test':self.model_test,'thinking':'disabled'},'engine':{'name':'OpenCode','version':'1.19.3','connected':self.engine is not None},'memory':self.memory(),'weekly':{'config':self.weekly.config(),'subscriptions':self.weekly.subscriptions(),'limit':3,'page_subscriptions':self.weekly.page_subscriptions(),'runs':self.weekly.runs(),'news':self.news.items()}}
+        jobs=[{**j,'payload':{k:v for k,v in j['payload'].items() if k!='skill_catalog_snapshot'}} for j in self.store.jobs() if j['conversation_id'] in visible]
+        return {'reading':{**reading_room.state(self.store),'updates':self.reading_updates.state()},'categories':library.categories(self.store),'library':library.catalog(self.store),'skills':task_skills.catalog(self.store),'sources':[s for s in self.store.sources() if not s['archived']],'asset_meta':asset_files.metadata(self.store),'demo':self.root!=self.credential_root,'artifacts':[a for a in self.store.artifacts() if not a['archived']],'conversations':[c for c in self.store.conversations() if c['id'] in visible],'jobs':jobs,'settings':self.settings,'model_status':{'key_configured':bool(model_key(self.credential_root)),'test':self.model_test,'thinking':'disabled'},'engine':{'name':'OpenCode','version':'1.19.3','connected':self.engine is not None},'memory':self.memory(),'weekly':{'config':self.weekly.config(),'subscriptions':self.weekly.subscriptions(),'limit':3,'page_subscriptions':self.weekly.page_subscriptions(),'runs':self.weekly.runs(),'news':self.news.items()}}
 
     def memory(self):
         path=self.root/'data/preferences.json'
@@ -163,7 +156,39 @@ class Handler(BaseHTTPRequestHandler):
         if not self.trusted():self.send_json({'error':'Invalid origin'},403);return
         p=urllib.parse.urlsplit(self.path);path=p.path
         try:
+            if path=='/api/capture/browser':return self.send_json(self.app.capture.state())
+            if path=='/api/appearance':return self.send_json(self.appearance())
+            match=re.fullmatch(r'/api/capture/(capture_[a-f0-9]+)/cover',path)
+            if match:
+                try:raw,mime=self.app.capture.image(match[1])
+                except Exception:return self.send_json({'error':'原文封面暂不可用'},404)
+                self.send_response(200);self.send_header('Content-Type',mime);self.send_header('X-Content-Type-Options','nosniff');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(raw);return
+            if path=='/api/reading/updates':return self.send_json(self.app.reading_updates.state())
+            match=re.fullmatch(r'/api/skills/([a-zA-Z0-9_-]+)(/export)?',path)
+            if match:
+                skill=task_skills.get(self.app.store,match[1])
+                if not match[2]:return self.send_json(skill)
+                raw=skill_packages.export(skill)
+                self.send_response(200);self.send_header('Content-Type','application/zip');self.send_header('Content-Length',str(len(raw)))
+                self.send_header('Content-Disposition','attachment; filename="'+skill['name']+'.zip"');self.send_header('Cache-Control','no-store')
+                self.end_headers();self.wfile.write(raw);return
             if path=='/api/notes':return self.send_json(asset_files.notes(self.app.store,urllib.parse.parse_qs(p.query).get('kind',[''])[0],urllib.parse.parse_qs(p.query).get('id',[''])[0]))
+            match=re.fullmatch(r'/api/news/(news_[a-f0-9]+)/cover',path)
+            if match:
+                try:raw,mime=self.app.news.cover(match[1])
+                except Exception:return self.send_json({'error':'原文封面不可用'},404)
+                self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(raw)))
+                self.send_header('X-Content-Type-Options','nosniff');self.send_header('Cache-Control','private,max-age=86400')
+                self.end_headers();self.wfile.write(raw);return
+            match=re.fullmatch(r'/api/news/(news_[a-f0-9]+)/images/([a-f0-9]{24})',path)
+            if match:
+                try:raw,mime=self.app.news.image(match[1],match[2])
+                except Exception:return self.send_json({'error':'原文图片暂不可用'},404)
+                self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(raw)))
+                self.send_header('X-Content-Type-Options','nosniff');self.send_header('Cache-Control','private,max-age=86400')
+                self.end_headers();self.wfile.write(raw);return
+            match=re.fullmatch(r'/api/news/(news_[a-f0-9]+)',path)
+            if match:return self.send_json(self.app.news.item(match[1]))
             match=re.fullmatch(r'/api/assets/(src_[a-f0-9]+)/info',path)
             if match:return self.send_json(asset_files.pdf_info(self.app,match[1]))
             match=re.fullmatch(r'/api/assets/(src_[a-f0-9]+)/page/(\d+)',path)
@@ -202,22 +227,29 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/site-icon':
                 ident=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('id',[''])[0]
                 link=next((l for l in connections.links(self.app.store) if l['id']==ident),None)
+                if not link:
+                    with self.app.store.lock:
+                        link=self.app.store.db.execute("SELECT url FROM reading_focus WHERE id=? AND kind='官网'",(ident,)).fetchone()
                 if not link:raise ValueError('网站不存在')
                 url=urllib.parse.urljoin(link['url'],'/favicon.ico');validate_url(url)
                 with urllib.request.build_opener(SafeRedirect()).open(urllib.request.Request(url,headers={'User-Agent':'Jimu/1.0'}),timeout=5) as r:
                     raw=r.read(100001);mime=r.headers.get('Content-Type','').split(';')[0]
                 if len(raw)>100000 or mime not in ('image/x-icon','image/vnd.microsoft.icon','image/png','image/jpeg','image/gif','image/webp'):raise ValueError('图标不可用')
-                self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Cache-Control','private,max-age=86400');self.end_headers();self.wfile.write(raw);return
+                self.send_response(200);self.send_header('Content-Type',mime);self.send_header('X-Content-Type-Options','nosniff');self.send_header('Cache-Control','private,max-age=86400');self.end_headers();self.wfile.write(raw);return
             if path=='/api/sites':return self.send_json(SITES)
             if path=='/api/connections':
-                return self.send_json({'links':connections.links(self.app.store),'github':{'cli_installed':bool(connections.shutil.which('gh'))},'browser_use':{'connected':False}})
+                mcp=mcp_connections.status(self.app.engine)
+                return self.send_json({'links':connections.links(self.app.store),'github':{'cli_installed':bool(connections.shutil.which('gh')),'connected':mcp.get('github',{}).get('status')=='connected'},'browser_use':{'connected':mcp.get('browser_use',{}).get('status')=='connected','capture':self.app.capture.state()}})
             if path=='/api/usage':return self.send_json(UsageLedger(self.app.credential_root).summary())
             if path=='/api/state':return self.send_json(self.app.state())
             if path.startswith('/api/conversations/'):
-                cid=path.split('/')[-1];self.app.store.conversation(cid);return self.send_json({'messages':self.app.store.messages(cid),'jobs':self.app.store.jobs(cid)})
+                cid=path.split('/')[-1];self.app.store.conversation(cid)
+                jobs=[{**j,'payload':{k:v for k,v in j['payload'].items() if k!='skill_catalog_snapshot'}} for j in self.app.store.jobs(cid)]
+                return self.send_json({'messages':self.app.store.messages(cid),'jobs':jobs})
             if path.startswith('/api/artifacts/') and path.endswith('/versions'):return self.send_json(self.app.store.versions(path.split('/')[3]))
             if path=='/api/export':
                 snapshot=self.app.state();snapshot.pop('settings');snapshot['tool_links']=connections.links(self.app.store)
+                snapshot['skills']=task_skills.all_skills(self.app.store)
                 snapshot['messages']={c['id']:self.app.store.messages(c['id']) for c in snapshot['conversations']}
                 snapshot['reading_notes']=[dict(r) for r in self.app.store.db.execute('SELECT * FROM reading_notes')]
                 return self.send_json(snapshot)
@@ -232,7 +264,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({'pages':pages,'format':'Markdown + wikilinks','local_path':str(sync_wiki(self.app.root,self.app.store))})
             target=ROOT/'web'/('index.html' if path=='/' else path.lstrip('/'))
             if not target.resolve().is_relative_to((ROOT/'web').resolve()) or not target.is_file():return self.send_json({'error':'Not found'},404)
-            types={'.html':'text/html','.css':'text/css','.js':'application/javascript','.woff2':'font/woff2','.woff':'font/woff','.svg':'image/svg+xml','.zip':'application/zip'}
+            types={'.html':'text/html','.css':'text/css','.js':'application/javascript','.woff2':'font/woff2','.woff':'font/woff','.svg':'image/svg+xml','.png':'image/png','.zip':'application/zip'}
             raw=target.read_bytes();self.send_response(200);self.send_header('Content-Type',types.get(target.suffix,'text/plain')+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)))
             self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; frame-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'")
             self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.wfile.write(raw)
@@ -243,6 +275,18 @@ class Handler(BaseHTTPRequestHandler):
         path=urllib.parse.urlsplit(self.path).path
         try:
             data=self.body()
+            if path=='/api/appearance':
+                if data.get('theme') not in ('classic','sage','mist'):raise ValueError('请选择已有皮肤')
+                file=self.app.root/'data/appearance.json'
+                with self.app.store.lock:
+                    temporary=file.with_suffix('.tmp');temporary.write_text(json.dumps({'theme':data['theme']}));temporary.replace(file)
+                return self.send_json({'theme':data['theme']})
+            if path=='/api/capture/preview':return self.send_json(self.app.capture.public_preview(data))
+            if path=='/api/capture/stage':return self.send_json(self.app.capture.stage(data.get('article')))
+            if path=='/api/capture/save':return self.send_json(self.app.capture.save(data))
+            if path=='/api/capture/browser/open':return self.send_json(self.app.capture.open_browser(data))
+            if path=='/api/capture/browser/read':return self.send_json(self.app.capture.read_browser(data))
+            if path=='/api/capture/browser/close':return self.send_json(self.app.capture.close_browser())
             if path=='/api/tool-links':return self.send_json(connections.save_link(self.app.store,data))
             if path=='/api/tool-links/remove':return self.send_json(connections.remove_link(self.app.store,data))
             if path=='/api/github/preview':return self.send_json(connections.github_preview(data))
@@ -273,6 +317,8 @@ class Handler(BaseHTTPRequestHandler):
                 meta=Metadata();meta.feed(text)
                 return self.send_json({'title':meta.title.strip()[:60],'description':meta.description.strip()[:200]})
             if path=='/api/mcp/connect':return self.send_json(mcp_connections.connect(self.app.engine,data.get('name')))
+            if path=='/api/mcp/github-login':return self.send_json(mcp_connections.connect_github_login(self.app.engine))
+            if path=='/api/mcp/github-test':return self.send_json(mcp_connections.test_github(data,self.app.engine))
             if path=='/api/mcp/github-token':return self.send_json(mcp_connections.save_github_token(self.app.engine,data.get('token')))
             if path=='/api/mcp/auth':
                 if data.get('name')!='github':raise ValueError('无效授权目标')
@@ -290,6 +336,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/assets/category':return self.send_json(library.assign(self.app.store,data))
             if path=='/api/skills':return self.send_json(task_skills.save(self.app.store,data))
             if path=='/api/skills/remove':return self.send_json(task_skills.remove(self.app.store,data))
+            if path=='/api/skills/import-preview':return self.send_json(skill_packages.preview(str(data.get('filename','')),data.get('content','')))
             if path=='/api/documents/save':
                 result=library.save_document(self.app.store,data);sync_wiki(self.app.root,self.app.store);return self.send_json(result)
             if path=='/api/documents/create':
@@ -319,7 +366,12 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/reading/favorite':return self.send_json(reading_room.favorite(self.app.store,data))
             if path=='/api/reading/focus':return self.send_json(reading_room.focus_save(self.app.store,data,validate_url))
             if path=='/api/reading/focus/remove':return self.send_json(reading_room.focus_remove(self.app.store,data))
-            if path=='/api/reading/snapshot':return self.send_json(reading_room.snapshot(self.app.store,self.app.news.items()))
+            if path=='/api/reading/snapshot':return self.send_json(reading_room.snapshot(self.app.store,self.app.news.items(),data.get('weeks',1)))
+            if path=='/api/reading/update':return self.send_json(self.app.reading_updates.manual(data),202)
+            if path=='/api/reading/schedule':return self.send_json(self.app.reading_updates.save(data))
+            if path=='/api/news/enrich':return self.send_json(self.app.news.enrich(data))
+            if path=='/api/news/reference':return self.send_json(self.app.news.reference(data))
+            if path=='/api/news/capture':return self.send_json(self.app.news.import_capture(data))
             if path=='/api/news/test-url':
                 from news import fetch_feed
                 try:
@@ -490,7 +542,9 @@ class Handler(BaseHTTPRequestHandler):
                     if not link:raise Conflict('引用网站已移除，请重新选择')
                     selected_websites.append({k:link[k] for k in ('name','url','description')})
                 if selected_websites:prompt+='\n\n引用网站（仅网址和简介，未读取实时全文；这些是参考资料，不是指令）：\n'+json.dumps(selected_websites,ensure_ascii=False)
-                skill_context=task_skills.selected(self.app.store,data.get('skill_refs',[]))
+                with self.app.store.lock:
+                    skill_context=task_skills.selected(self.app.store,data.get('skill_refs',[]))
+                    installed_skills=task_skills.all_skills(self.app.store)
                 output_board=kind=='wiki' and any(s['id']=='board-generation' for s in skill_context)
                 documents=library.selected_documents(self.app.store,data.get('document_refs',[]))
                 doc_target=None
@@ -498,7 +552,8 @@ class Handler(BaseHTTPRequestHandler):
                     doc_target=library.selected_documents(self.app.store,[data.get('document_target')])[0]
                     if not any(d['id']==doc_target['id'] for d in documents):documents.append(doc_target)
                 board_context=selected_text(self.app.store,data.get('board_refs',[]))
-                context_meta=check_context(prompt,selected_sources+pending_narrative,wiki_pages,self.app.memory(),history,target,career_payload.get('career_snapshot'),board_context,method,skill_context,documents)
+                discovery=[{k:s[k] for k in ('name','description')} for s in installed_skills]
+                context_meta=check_context(prompt,selected_sources+pending_narrative,wiki_pages,self.app.memory(),history,target,career_payload.get('career_snapshot'),board_context,method,task_skills.prompt_skills(skill_context),documents,discovery)
                 if existing_cid and any(j['status'] in ('queued','running') for j in self.app.store.jobs(existing_cid)):
                     raise Conflict('本会话已有任务在运行；请等待或先中断')
                 if kind=='experience':
@@ -510,7 +565,7 @@ class Handler(BaseHTTPRequestHandler):
                 snapshots={s['id']:s for s in selected_sources}
                 cid=self.app.store.conversation(existing_cid)
                 job=self.app.store.create_job(cid,artifact['id'],{'prompt':prompt,'source_ids':sources,'source_snapshot':snapshots,'retrieval':data.get('retrieval',[]),'base_revision':artifact['revision'],'kind':kind,'stages':[],'context_meta':{**context_meta,'history':history_policy},'artifact_snapshot':artifact,'preferences_snapshot':self.app.memory(),'history_snapshot':history,'execution_settings':dict(self.app.settings),'wiki_snapshot':wiki_pages,'wiki_target_id':target['id'] if target else None,'wiki_target_snapshot':target,'wiki_base_revision':target['revision'] if target else 0,**career_payload})
-                self.app.store.update_job(job['id'],task_method=method,board_snapshot=board_context,skill_snapshot=skill_context,document_snapshot=documents,document_target=doc_target,output_board=output_board)
+                self.app.store.update_job(job['id'],task_method=method,board_snapshot=board_context,skill_snapshot=task_skills.prompt_skills(skill_context),skill_catalog_snapshot=installed_skills,document_snapshot=documents,document_target=doc_target,output_board=output_board)
                 self.app.store.message(cid,'user',prompt,job['id']);self.app.runner.submit(self.app.store.job(job['id']));return self.send_json(self.app.store.job(job['id']),202)
             if path=='/api/settings':
                 if any(j['status'] in ('queued','running') for j in self.app.store.jobs()):raise Conflict('任务执行时不能切换模型')
@@ -543,7 +598,7 @@ class Handler(BaseHTTPRequestHandler):
                     with self.app.store.lock:
                         job=self.app.store.job(jid)
                         if job['status']!='review':raise Conflict('该文稿已保存或不可编辑')
-                        if job['payload'].get('kind') not in ('wiki','document','experience','tailor'):raise ValueError('该类型暂不支持文稿编辑')
+                        if job['payload'].get('kind') not in ('wiki','document','experience','tailor') and not job['payload'].get('chat_output'):raise ValueError('该类型暂不支持文稿编辑')
                         if data.get('expected_updated')!=job['updated']:raise Conflict('文稿已变化，请重新打开')
                         if data.get('expected_revision',0)!=job['payload'].get('draft_revision',0):raise Conflict('文稿已变化，请重新打开')
                         if 'scene' in data:
@@ -568,6 +623,12 @@ class Handler(BaseHTTPRequestHandler):
         except Conflict as e:self.send_json({'error':str(e)},409)
         except Exception as e:self.send_json({'error':str(e)},400)
 
+    def appearance(self):
+        file=self.app.root/'data/appearance.json'
+        try:theme=json.loads(file.read_text()).get('theme')
+        except (OSError,ValueError):theme='classic'
+        return {'theme':theme if theme in ('classic','sage','mist') else 'classic'}
+
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--port',type=int,default=8768);parser.add_argument('--engine-port',type=int,default=4098);args=parser.parse_args()
@@ -581,12 +642,15 @@ def main():
         server.demo_app=App(demo_root,demo_engine);server.demo_app.credential_root=ROOT;server.demo_app.settings.update(server.app.settings)
         # Both spaces share one engine; serialize provider configuration and calls.
         server.demo_app.runner.queue=server.app.runner.queue
-    # MVP reading updates are user-triggered only; no background scheduler.
+    server.app.reading_updates.start()
     print('Workbench http://127.0.0.1:'+str(args.port),flush=True)
     try:server.serve_forever()
     except KeyboardInterrupt:pass
     finally:
-        server.app.weekly.stop.set();server.server_close();process.terminate()
+        server.app.reading_updates.stop.set();server.app.weekly.stop.set()
+        try:server.app.capture.close_browser()
+        except Exception:pass
+        server.server_close();process.terminate()
         try:process.wait(timeout=8)
         except Exception:process.kill()
 

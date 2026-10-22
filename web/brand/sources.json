@@ -1,0 +1,10 @@
+{
+  "purpose": "Official website and organization icons for source identification. Brand ownership remains with the respective owners.",
+  "retrieved": "2026-10-22",
+  "icons": {
+    "deepseek.svg": "https://api-docs.deepseek.com/img/favicon.svg",
+    "doubao.png": "https://lf-flow-web-cdn.doubao.com/obj/flow-doubao/favicon/new-doubao/128x128.png",
+    "openai.png": "https://github.com/openai.png?size=80",
+    "anthropic.png": "https://github.com/anthropics.png?size=80"
+  }
+}

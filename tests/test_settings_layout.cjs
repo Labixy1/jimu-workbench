@@ -9,16 +9,16 @@ assert(rule('#settings-dialog[open]').includes('grid-template-rows:auto minmax(0
 assert(rule('.settings-layout').includes('min-height:0'));
 assert(rule('.settings-content').includes('overflow:auto'));
 assert(rule('.settings-content').includes('scrollbar-gutter:stable'));
-const panels=new Map(['model','preferences','data'].map(id=>['#settings-'+id,{hidden:false}]));
+const panels=new Map(['model','preferences','appearance','data'].map(id=>['#settings-'+id,{hidden:false}]));
 const content={scrollTop:240};panels.set('#settings-dialog .settings-content',content);
-const buttons=['model','preferences','data'].map(id=>({dataset:{settingsTab:id},classList:{toggle(name,value){this[name]=value;}}}));
+const buttons=['model','preferences','appearance','data'].map(id=>({dataset:{settingsTab:id},classList:{toggle(name,value){this[name]=value;}}}));
 const ctx=vm.createContext({$:s=>panels.get(s),document:{querySelectorAll:()=>buttons}});
 const js=fs.readFileSync(path.join(root,'web/framework.js'),'utf8');
 vm.runInContext(js.slice(js.indexOf('function selectSettingsTab('),js.indexOf("$('#asset-new-document')")),ctx);
-for(const tab of ['preferences','data','model']){
+for(const tab of ['preferences','appearance','data','model']){
  content.scrollTop=240;ctx.selectSettingsTab(tab);
  assert.equal(content.scrollTop,0);
- for(const id of ['model','preferences','data'])assert.equal(panels.get('#settings-'+id).hidden,id!==tab);
+ for(const id of ['model','preferences','appearance','data'])assert.equal(panels.get('#settings-'+id).hidden,id!==tab);
  for(const button of buttons)assert.equal(button.classList.active,button.dataset.settingsTab===tab);
 }
 console.log('PASS fixed settings shell, internal scrolling, stable gutter and tab scroll reset');

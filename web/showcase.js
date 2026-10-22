@@ -8,8 +8,14 @@ if(new URLSearchParams(location.search).get('showcase')==='1'){
   const data=await bundle,path=url.pathname,method=(options.method||(typeof input==='object'&&input.method)||'GET').toUpperCase();
   if(method!=='GET')return new Response(JSON.stringify({error:'公开演示副本不能调用模型或保存数据；请在本地正常空间操作。'}),{status:400,headers:{'Content-Type':'application/json'}});
   if(path==='/api/state')return respond(data.state);
+  if(path.startsWith('/api/skills/')){
+   const skill=data.state.skills?.find(s=>s.id===path.split('/')[3]);
+   if(!skill)return new Response(JSON.stringify({error:'这个公开副本没有该技能'}),{status:404,headers:{'Content-Type':'application/json'}});
+   return respond({...skill,skill_md:skill.skill_md||skill.instructions,resources:skill.resources||[],read_only:true});
+  }
   if(path==='/api/connections')return respond({links:data.state.tool_links||[],github:{cli_installed:false},browser_use:{connected:false}});
   if(path==='/api/sites')return respond(data.sites||[]);
+  if(path==='/api/reading/items')return respond([]);
   if(path==='/api/usage')return respond(data.usage);
   if(path==='/api/notes')return respond(data.notes.filter(n=>n.target_id===url.searchParams.get('id')));
   if(path.startsWith('/api/conversations/')){const id=path.split('/').pop();return respond({messages:data.messages[id]||[],jobs:data.state.jobs.filter(j=>j.conversation_id===id)});}

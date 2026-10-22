@@ -14,6 +14,8 @@ const ctx = vm.createContext({
 for (const file of ['knowledge.js', 'board-preview.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, 'web', file), 'utf8'), ctx);
 }
+const framework = fs.readFileSync(path.join(root, 'web/framework.js'), 'utf8');
+vm.runInContext(framework.slice(framework.indexOf('function documentSourcesMarkup('), framework.indexOf('function renderDocument()')), ctx);
 let count = 0;
 const test = async (name, fn) => {await fn(); count++; console.log('PASS ' + name);};
 (async () => {
@@ -31,6 +33,26 @@ const test = async (name, fn) => {await fn(); count++; console.log('PASS ' + nam
   });
   await test('deleted elements are absent', () => {
     assert.match(ctx.boardThumbnail({elements:[{isDeleted:true}]}, 'test'), /空白画板/);
+  });
+  await test('document sources group exact quotes without executing source markup', () => {
+    const output=ctx.documentSourcesMarkup({citations:[{source_id:'src_one',quote:'<script>unsafe</script>'},{source_id:'src_one',quote:'second quote'}]},[{id:'src_one',title:'<img onerror=bad>'}]);
+    assert(output.includes('来源依据 · 1 份材料'));
+    assert.equal((output.match(/data-source=/g)||[]).length,1);
+    assert.equal((output.match(/<blockquote>/g)||[]).length,2);
+    assert(!output.includes('<script>'));
+    assert(!output.includes('<img'));
+    assert(output.includes('&lt;script&gt;'));
+  });
+  await test('missing document sources retain quotes without a broken source button', () => {
+    assert.equal(ctx.documentSourcesMarkup({citations:[]},[]),'');
+    const output=ctx.documentSourcesMarkup({citations:[{source_id:'src_gone',quote:'original words'}]},[]);
+    assert(output.includes('来源已归档'));
+    assert(output.includes('original words'));
+    assert(!output.includes('data-source='));
+  });
+  await test('reference arrows keep their dashed style', () => {
+    const svg=ctx.boardThumbnail({elements:[{type:'arrow',id:'reference',x:50,y:50,width:80,height:0,points:[[0,0],[80,0]],strokeStyle:'dashed'}]},'reference');
+    assert(svg.includes('stroke-dasharray="8 6"'));
   });
   await test('text, colors and marker ids cannot inject markup', () => {
     const svg = ctx.boardThumbnail({elements:[{type:'text', text:'<script>bad</script>', strokeColor:'red" onload="evil', width:30, height:30}], appState:{viewBackgroundColor:'url(https://evil)'}}, '"><script>');

@@ -1,6 +1,6 @@
 import unittest
 import test_api
-from context import check_context, recent_history, stage_context
+from context import check_context, recent_history, research_quote_anchors, stage_context
 
 
 class ContextTests(unittest.TestCase):
@@ -30,6 +30,27 @@ class ContextTests(unittest.TestCase):
         source={'content':'x'*34000}
         with self.assertRaises(ValueError):check_context('test',[source],[{'body':{'content':'y'*4000}}],{},[])
         self.assertEqual(len(source['content']),34000)
+
+    def test_revision_receives_actual_reviewer_feedback(self):
+        packet={'prompt':'fixture','review_feedback':{'passed':False,'issues':['Unsupported claim']},
+                'proposal':{'page':{'title':'Current draft'}}}
+        self.assertEqual(stage_context(packet,'draft')['review_feedback'],packet['review_feedback'])
+        self.assertEqual(stage_context(packet,'draft')['proposal'],packet['proposal'])
+        self.assertNotIn('review_feedback',stage_context(packet,'research'))
+
+    def test_quote_anchors_reuse_selected_evidence_without_copying_full_sources(self):
+        quote='Only selected evidence may support the result.'
+        original=quote+'\n'+'unrelated text '*2000
+        source={'id':'s','content':original}
+        research={'findings':[{'source_id':'s','quote':quote},
+                              {'source_id':'s','quote':quote},
+                              {'source_id':'other','quote':quote},
+                              {'source_id':'s','quote':'invented quotation'},
+                              {'source_id':{},'quote':quote}]}
+        anchors=research_quote_anchors([source],research)
+        self.assertEqual(anchors,[{'source_id':'s','quote_id':'evidence_1','quote':quote}])
+        self.assertLess(len(str(anchors)),200)
+        self.assertEqual(source['content'],original)
 
 
 class ContextApiTests(unittest.TestCase):

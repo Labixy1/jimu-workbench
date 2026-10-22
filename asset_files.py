@@ -208,6 +208,12 @@ def add_note(store,data):
         a=store.artifact(target)
         if a['kind']!='wiki' or a['archived']: raise ValueError('无效知识页')
         content=a['body']['content']
+    elif kind=='news':
+        with store.lock:
+            row=store.db.execute('SELECT body,source_id FROM reading_news WHERE id=?',(target,)).fetchone()
+        if not row or store.source(row['source_id'])['archived']:raise ValueError('文章不可用')
+        article=json.loads(row['body'])
+        content=article.get('content') or article.get('excerpt','')
     else: raise ValueError('笔记目标无效')
     quote=str(data.get('quote','')).strip();text=str(data.get('text','')).strip()
     if not 1<=len(text)<=2000 or len(quote)>1200: raise ValueError('笔记最多2000字，引文最多1200字')
