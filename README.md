@@ -19,26 +19,26 @@
 ## 界面预览
 
 <p align="center">
-  <a href="docs/screenshots/01-chat.jpg"><img src="docs/screenshots/01-chat.jpg" width="720" alt="积木主对话界面" /></a>
+  <a href="docs/screenshots/2026-10-22/01-chat.jpg"><img src="docs/screenshots/2026-10-22/01-chat.jpg" width="720" alt="积木主对话界面" /></a>
   <br />主对话：从一个问题或一份材料开始
 </p>
 
 <table>
   <tr>
-    <td width="50%" align="center"><a href="docs/screenshots/02-assets.jpg"><img src="docs/screenshots/02-assets.jpg" width="440" alt="资产管理" /></a><br /><b>资产管理</b><br />文件夹、原始材料与创作成果</td>
-    <td width="50%" align="center"><a href="docs/screenshots/03-document.jpg"><img src="docs/screenshots/03-document.jpg" width="440" alt="对话与文稿预览" /></a><br /><b>文稿预览</b><br />在对话旁阅读、编辑生成内容</td>
+    <td width="50%" align="center"><a href="docs/screenshots/2026-10-22/02-assets.jpg"><img src="docs/screenshots/2026-10-22/02-assets.jpg" width="440" alt="资产管理" /></a><br /><b>资产管理</b><br />文件夹、原始材料与创作成果</td>
+    <td width="50%" align="center"><a href="docs/screenshots/2026-10-22/03-document.jpg"><img src="docs/screenshots/2026-10-22/03-document.jpg" width="440" alt="对话与文稿预览" /></a><br /><b>文稿预览</b><br />在对话旁阅读、编辑生成内容</td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/screenshots/04-reading.jpg"><img src="docs/screenshots/04-reading.jpg" width="440" alt="阅览室" /></a><br /><b>阅览室</b><br />周刊、重点关注与个人收藏</td>
-    <td align="center"><a href="docs/screenshots/05-skills.jpg"><img src="docs/screenshots/05-skills.jpg" width="440" alt="技能管理" /></a><br /><b>技能管理</b><br />管理可复用的任务规则</td>
+    <td align="center"><a href="docs/screenshots/2026-10-22/04-reading.jpg"><img src="docs/screenshots/2026-10-22/04-reading.jpg" width="440" alt="阅览室：三期周刊、原文封面与重点关注" /></a><br /><b>阅览室</b><br />周刊、重点关注与个人收藏</td>
+    <td align="center"><a href="docs/screenshots/2026-10-22/05-skills.jpg"><img src="docs/screenshots/2026-10-22/05-skills.jpg" width="440" alt="Skill 技能管理" /></a><br /><b>技能管理</b><br />导入、编辑与引用 SKILL.md 技能包</td>
   </tr>
   <tr>
-    <td align="center"><a href="docs/screenshots/06-websites.jpg"><img src="docs/screenshots/06-websites.jpg" width="440" alt="常用网站" /></a><br /><b>常用网站</b><br />分类维护设计、开发与学习入口</td>
-    <td align="center"><a href="docs/screenshots/07-board.jpg"><img src="docs/screenshots/07-board.jpg" width="440" alt="画板编辑器" /></a><br /><b>画板编辑</b><br />将流程图作为可编辑资产保存</td>
+    <td align="center"><a href="docs/screenshots/2026-10-22/06-websites.jpg"><img src="docs/screenshots/2026-10-22/06-websites.jpg" width="440" alt="常用网站" /></a><br /><b>常用网站</b><br />分类维护设计、开发与学习入口</td>
+    <td align="center"><a href="docs/screenshots/2026-10-22/07-board.jpg"><img src="docs/screenshots/2026-10-22/07-board.jpg" width="440" alt="画板编辑器" /></a><br /><b>画板编辑</b><br />将流程图作为可编辑资产保存</td>
   </tr>
 </table>
 
-截图更新于2026-10-21，来自本地运行的真实任务回看，仅使用公开资料。文稿、画板与对话均保留实际模型结果，画板经人工核对修正；不是外部用户反馈。点击图片可查看完整尺寸。
+截图拍摄于 2026-10-22，来自当前本地运行版本。阅览室展示已采集的公开文章，文稿与画板为真实任务回看，画板经人工核对修正。点击图片可查看完整尺寸。
 
 ## 功能特性
 
